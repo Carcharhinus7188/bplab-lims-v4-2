@@ -52,3 +52,20 @@ def calculate(kind,df):
         df["ΔE*"]=(((df["L1*"]-df["L0*"])**2+(df["a1*"]-df["a0*"])**2+(df["b1*"]-df["b0*"])**2)**0.5).round(3)
         df["判定"]="按限值判定"
     return df
+
+def initial_dataframe_for_samples(kind, sample_ids):
+    """Create the experiment table using the actual controlled sample numbers."""
+    sample_ids = list(sample_ids)
+    df = initial_dataframe(kind, max(len(sample_ids), 1))
+    if not sample_ids:
+        return df
+    if kind == "hv":
+        return pd.DataFrame([
+            {"样品编号": sid, "测试面": face, "压痕1/HV": 0.0, "压痕2/HV": 0.0, "压痕3/HV": 0.0}
+            for sid in sample_ids for face in ["面1", "面2"]
+        ])
+    id_columns = [c for c in ["试样编号", "样品编号", "样品编号/位置"] if c in df.columns]
+    if id_columns:
+        df = df.iloc[:len(sample_ids)].copy()
+        df[id_columns[0]] = sample_ids
+    return df

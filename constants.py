@@ -5,77 +5,60 @@ COMPANY_CN = "大连标普检测有限公司"
 COMPANY_EN = "DALIAN BIAOPU TESTING CO., LTD."
 SYSTEM_CN = "大连标普实验室样品全过程追溯系统"
 SYSTEM_EN = "BPLab Sample Lifecycle Tracking System"
-APP_VERSION = "BPLab Trace V4.6 全流程单据与报告审批版"
+APP_VERSION = "BPLab Trace V4.7 稳定重构版"
+TIMEZONE_NAME = "Asia/Shanghai"
+
 STORAGE_AREAS = ["A区域", "B区域"]
 SAMPLE_CONDITIONS = ["完好", "不完好"]
+RETURN_CONDITIONS = ["完好", "部分消耗", "已破坏", "全部消耗"]
+DETECTION_LOCATIONS = ["力学实验室", "物理性能实验室", "显微室", "视觉检测室", "制样室", "其他"]
 
 ROLES = ["管理员", "收样员", "实验人员", "复核实验员", "样品管理员", "批准人"]
 
 EXPERIMENTS = {
     "表面粗糙度试验": {
         "category": "增材制造检测", "std": "YY/T 1702-2020；GB/T 10610-2009",
-        "kind": "rough", "n": 6, "template": None,
-        "sop": "SOP_ROUGHNESS.docx"
+        "kind": "rough", "n": 6, "template": None, "sop": "SOP_ROUGHNESS.docx"
     },
     "金属-陶瓷结合三点弯曲试验": {
         "category": "力学性能检测", "std": "YY 0621.1-2016",
-        "kind": "mc", "n": 6,
-        "template": "RECORD_MC_THREE_POINT.docx",
-        "sop": "SOP_MC_THREE_POINT.docx"
+        "kind": "mc", "n": 6, "template": "RECORD_MC_THREE_POINT.docx", "sop": "SOP_MC_THREE_POINT.docx"
     },
     "金属-陶瓷结合裂纹萌生试验": {
         "category": "力学性能检测", "std": "YY 0621.1-2016 / ISO 9693-1",
-        "kind": "mc", "n": 6,
-        "template": "RECORD_MC_CRACK_INITIATION.docx",
-        "sop": "SOP_MC_CRACK_INITIATION.docx"
+        "kind": "mc", "n": 6, "template": "RECORD_MC_CRACK_INITIATION.docx", "sop": "SOP_MC_CRACK_INITIATION.docx"
     },
     "金属内部质量X射线灰度分析": {
         "category": "内部质量检测", "std": "实验室SOP/委托技术要求",
-        "kind": "xray", "n": 6,
-        "template": "RECORD_XRAY_INTERNAL_QUALITY.docx",
-        "sop": "SOP_XRAY_INTERNAL_QUALITY.docx"
+        "kind": "xray", "n": 6, "template": "RECORD_XRAY_INTERNAL_QUALITY.docx", "sop": "SOP_XRAY_INTERNAL_QUALITY.docx"
     },
     "翘曲变形试验": {
         "category": "增材制造检测", "std": "YY/T 1702-2020 第7.3.2条",
-        "kind": "warp", "n": 10,
-        "template": "RECORD_WARPAGE.docx",
-        "sop": "SOP_WARPAGE.docx"
+        "kind": "warp", "n": 10, "template": "RECORD_WARPAGE.docx", "sop": "SOP_WARPAGE.docx"
     },
     "热膨胀系数试验": {
         "category": "物理性能检测", "std": "热膨胀系数测试SOP/设备说明书",
-        "kind": "cte", "n": 6,
-        "template": "RECORD_CTE.docx",
-        "sop": None
+        "kind": "cte", "n": 6, "template": "RECORD_CTE.docx", "sop": None
     },
     "陶瓷牙耐急冷急热试验": {
         "category": "陶瓷材料检测", "std": "YY 0300-2009 第7.10条",
-        "kind": "shock", "n": 28,
-        "template": "RECORD_THERMAL_SHOCK.docx",
-        "sop": "SOP_THERMAL_SHOCK.docx"
+        "kind": "shock", "n": 28, "template": "RECORD_THERMAL_SHOCK.docx", "sop": "SOP_THERMAL_SHOCK.docx"
     },
     "弯曲性能试验": {
         "category": "力学性能检测", "std": "YY/T 1702-2020",
-        "kind": "bend", "n": 6,
-        "template": "RECORD_BENDING.docx",
-        "sop": "SOP_BENDING.docx"
+        "kind": "bend", "n": 6, "template": "RECORD_BENDING.docx", "sop": "SOP_BENDING.docx"
     },
     "维氏硬度试验": {
         "category": "力学性能检测", "std": "GB/T 4340.1-2009",
-        "kind": "hv", "n": 6,
-        "template": "RECORD_VICKERS_HARDNESS.docx",
-        "sop": None
+        "kind": "hv", "n": 6, "template": "RECORD_VICKERS_HARDNESS.docx", "sop": None
     },
     "增材制造金属试样厚度测量": {
         "category": "增材制造检测", "std": "YY/T 1702-2020",
-        "kind": "thickness", "n": 5,
-        "template": "RECORD_THICKNESS.docx",
-        "sop": "SOP_THICKNESS.docx"
+        "kind": "thickness", "n": 5, "template": "RECORD_THICKNESS.docx", "sop": "SOP_THICKNESS.docx"
     },
     "牙科材料色稳定性试验": {
         "category": "物理性能检测", "std": "YY/T 0631-2008 / 产品技术要求",
-        "kind": "color", "n": 6,
-        "template": "RECORD_COLOR_STABILITY.docx",
-        "sop": "SOP_COLOR_STABILITY.docx"
+        "kind": "color", "n": 6, "template": "RECORD_COLOR_STABILITY.docx", "sop": "SOP_COLOR_STABILITY.docx"
     },
 }
 
@@ -93,10 +76,10 @@ CHECK_ITEMS = {
 }
 
 ROLE_MENUS = {
-"管理员":["首页看板","样品入库","基础资料","样品全流程","任务分配","我的检测任务","实验记录","待复核","样品归还","回库确认","单据中心","报告中心","签名中心","修改追踪","已删除样品","SOP与模板版本","用户与权限"],
-"收样员":["首页看板","样品入库","基础资料","样品全流程","任务分配","单据中心","已删除样品"],
-"实验人员":["首页看板","样品全流程","我的检测任务","实验记录","样品归还","单据中心","报告中心","修改追踪"],
-"复核实验员":["首页看板","样品全流程","待复核","单据中心","报告中心","修改追踪"],
-"样品管理员":["首页看板","样品全流程","回库确认","单据中心"],
-"批准人":["首页看板","报告中心","单据中心"]
+    "管理员": ["首页看板", "检验委托与入库", "基础资料", "样品全流程", "任务分配", "我的检测任务", "实验记录", "原始记录复核", "样品归还", "回库确认", "单据中心", "报告中心", "修改追踪", "已删除样品", "SOP与模板版本", "电子签名", "用户与权限"],
+    "收样员": ["首页看板", "检验委托与入库", "基础资料", "样品全流程", "任务分配", "单据中心", "已删除样品"],
+    "实验人员": ["首页看板", "样品全流程", "我的检测任务", "实验记录", "样品归还", "单据中心", "报告中心", "修改追踪"],
+    "复核实验员": ["首页看板", "样品全流程", "原始记录复核", "单据中心", "报告中心", "修改追踪"],
+    "样品管理员": ["首页看板", "样品全流程", "回库确认", "单据中心"],
+    "批准人": ["首页看板", "报告中心", "单据中心"],
 }
