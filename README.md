@@ -1,26 +1,35 @@
-# BPLab Trace V4.4 Clean GitHub Package
+# BPLab Trace V4.5 GitHub Package
 
 大连标普实验室样品全过程追溯系统
 
-本包已经重新制作。ZIP内部目录和文件名全部使用英文字符，避免在Windows、macOS、GitHub或Streamlit之间出现中文文件名乱码；系统页面、客户信息、样品名称和记录内容仍正常显示中文。
+## 本版更新
 
-## 已修复
+1. 所有系统业务时间固定为中国大陆时区 `Asia/Shanghai（UTC+8）`。
+2. 首次运行不再预置演示客户或演示样品。
+3. 管理员和收样员均可在“基础资料”中新增客户信息和样品名称。
+4. 只有管理员可以上传、批准和启用SOP及实验原始记录表。
+5. 样品入库的计划完成日期默认按接收日期顺延一个自然月，并允许手工调整。
 
-- 删除旧包内已经乱码的模板文件名。
-- 全部程序源代码统一为UTF-8。
-- 全部SOP和原始记录表改用稳定英文文件名。
-- 重新绑定程序中的模板路径。
-- 使用最新上传的裂纹萌生、翘曲、耐急冷急热、厚度测量文件。
-- 不携带旧数据库，首次运行自动生成干净数据库。
+## 自然月示例
 
-## 上传GitHub
+- 2026-07-21 接收，默认完成日期为 2026-08-21
+- 2026-01-31 接收，默认完成日期为 2026-02-28
+- 2028-01-31 接收，默认完成日期为 2028-02-29
 
-解压后，将文件夹中的全部内容上传到仓库根目录。仓库根目录应直接看到 app.py、constants.py、templates 和 requirements.txt。Streamlit入口选择 app.py。
+## GitHub上传
+
+解压后，将里面的全部内容上传到GitHub仓库根目录。Streamlit入口选择：
+
+`app.py`
+
+上传后建议在Streamlit后台执行：
+
+`Manage app -> Reboot app`
 
 ## 演示账号
 
-管理员：admin / admin123
-收样员：receiver / receive123
-实验员：tester / test123
-复核员：reviewer / review123
-样品管理员：store / store123
+- 管理员：`admin / admin123`
+- 收样员：`receiver / receive123`
+- 实验员：`tester / test123`
+- 复核员：`reviewer / review123`
+- 样品管理员：`store / store123`

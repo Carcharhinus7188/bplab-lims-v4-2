@@ -80,6 +80,7 @@ with st.sidebar:
     page=st.radio("导航",nav,label_visibility="collapsed")
     st.divider()
     st.caption("登录状态：7天内刷新保持")
+    st.caption("系统时间：中国大陆 Asia/Shanghai（UTC+8）")
     if st.button("退出登录",use_container_width=True):
         delete_session(st.query_params.get("session",""))
         st.query_params.clear();st.session_state.clear();st.rerun()
@@ -109,7 +110,9 @@ elif page=="样品入库":
     header("样品接收、登记和首次入库")
     customers=list_customers(False);catalog=list_sample_catalog(False)
     if not customers or not catalog:
-        st.error("请先在“基础资料”中录入至少一个客户和一个样品名称。")
+        st.error("当前没有可选的客户或样品名称。请先进入“基础资料”，由收样员或管理员新增客户信息和样品名称。")
+        if role in ["收样员","管理员"]:
+            st.info("侧边栏选择“基础资料”即可录入；保存后返回本页面进行入库。")
     else:
         a,b=st.columns(2)
         customer_id=a.selectbox("客户名称",[x["id"] for x in customers],format_func=lambda x:next(c["name"] for c in customers if c["id"]==x))
@@ -117,8 +120,17 @@ elif page=="样品入库":
         customer=next(x for x in customers if x["id"]==customer_id)
         cat=next(x for x in catalog if x["id"]==catalog_id)
         a,b,c=st.columns(3)
-        received=a.date_input("接收日期",value=date.today())
-        due=b.date_input("计划完成日期",value=date.today())
+        received=a.date_input("接收日期",value=china_today(),key="intake_received_date")
+        calculated_due=add_months_to_date(received,1)
+        if st.session_state.get("_due_date_source") != str(received):
+            st.session_state["intake_due_date"]=calculated_due
+            st.session_state["_due_date_source"]=str(received)
+        due=b.date_input(
+            "计划完成日期",
+            value=calculated_due,
+            key="intake_due_date",
+            help="默认按接收日期顺延一个自然月，可根据实际任务手工调整。",
+        )
         location=c.selectbox("入库位置",STORAGE_AREAS)
         model=a.text_input("规格型号")
         batch_no=b.text_input("批号")
@@ -158,7 +170,11 @@ elif page=="样品入库":
 
 elif page=="基础资料":
     header("客户信息和样品名称基础资料")
-    tab1,tab2=st.tabs(["客户信息","样品名称"])
+    if role not in ["管理员","收样员"]:
+        st.error("仅管理员和收样员可以新增或维护客户信息、样品名称。")
+        st.stop()
+    st.info("本模块不依赖初始数据库。收样员和管理员可随时新增客户和样品名称，启用后即可在样品入库页面选择。")
+    tab1,tab2=st.tabs(["客户信息录入","样品名称录入"])
     with tab1:
         rows=list_customers(True)
         if rows: st.dataframe(pd.DataFrame(rows)[["id","customer_code","name","short_name","contact","phone","address","enabled","notes"]],hide_index=True,use_container_width=True)
@@ -168,8 +184,15 @@ elif page=="基础资料":
         contact=a.text_input("联系人");phone=b.text_input("联系电话");address=c.text_input("地址")
         note=st.text_area("客户备注")
         if st.button("保存客户",type="primary"):
-            try: add_customer(code,name,short,contact,phone,address,note);st.success("客户已保存");st.rerun()
-            except Exception as e: st.error(str(e))
+            if not name.strip():
+                st.error("客户名称不能为空")
+            else:
+                try:
+                    add_customer(code,name,short,contact,phone,address,note)
+                    st.success("客户已保存，可在样品入库页面直接选择")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
         if rows:
             cid=st.selectbox("启用/停用客户",[x["id"] for x in rows],format_func=lambda x:next(c["name"] for c in rows if c["id"]==x))
             enabled=next(c["enabled"] for c in rows if c["id"]==cid)
@@ -185,8 +208,15 @@ elif page=="基础资料":
         defaults=st.multiselect("默认检测项目",list(EXPERIMENTS))
         note=st.text_area("样品名称备注")
         if st.button("保存样品名称",type="primary"):
-            try: add_sample_catalog(code,name,category,unit,defaults,note);st.success("样品名称已保存");st.rerun()
-            except Exception as e: st.error(str(e))
+            if not name.strip():
+                st.error("样品名称不能为空")
+            else:
+                try:
+                    add_sample_catalog(code,name,category,unit,defaults,note)
+                    st.success("样品名称已保存，可在样品入库页面直接选择")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
         if rows:
             sid=st.selectbox("启用/停用样品名称",[x["id"] for x in rows],format_func=lambda x:next(c["name"] for c in rows if c["id"]==x))
             enabled=next(c["enabled"] for c in rows if c["id"]==sid)
@@ -317,7 +347,7 @@ elif page=="实验记录":
             sample_no=a.text_input("样品编号/批号",common_prior.get("sample_no",s["sample_no"]))
             model=b.text_input("规格型号",common_prior.get("model",s["model"]))
             material=c.text_input("材料名称",common_prior.get("material",""))
-            test_date=a.date_input("检测日期",value=date.fromisoformat(common_prior["test_date"]) if common_prior.get("test_date") else date.today())
+            test_date=a.date_input("检测日期",value=date.fromisoformat(common_prior["test_date"]) if common_prior.get("test_date") else china_today())
             location=b.text_input("检测地点",common_prior.get("location",t["room"]))
         with tab2:
             a,b,c=st.columns(3)
@@ -474,12 +504,16 @@ elif page=="已删除样品":
 
 elif page=="SOP与模板版本":
     header("SOP和原始记录表版本管理")
+    if role!="管理员":
+        st.error("仅管理员可以新增、上传、批准和启用SOP或实验原始记录表。")
+        st.stop()
+    st.info("管理员上传新版本后，新建记录使用现行版本；历史记录继续绑定原版本。")
     rows=all_template_versions()
     if rows:st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
     section("启用新版本")
     a,b,c=st.columns(3)
     exp=a.selectbox("实验项目",list(EXPERIMENTS));doctype=b.selectbox("文件类型",["SOP","原始记录表"]);version=c.text_input("版本号","A/1")
-    effective=st.date_input("生效日期")
+    effective=st.date_input("生效日期",value=china_today())
     note=st.text_input("变更说明")
     uploaded=st.file_uploader("上传DOCX",type=["docx"])
     if st.button("批准并启用",type="primary"):

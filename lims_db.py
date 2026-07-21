@@ -3,10 +3,32 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
-import hashlib, json, re, secrets, sqlite3
+from zoneinfo import ZoneInfo
+import calendar, hashlib, json, re, secrets, sqlite3
 
 ROOT = Path(__file__).parent
 DB_PATH = ROOT / "data" / "bplab_lims_demo.db"
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
+
+def china_now():
+    """返回中国大陆当前时间（北京时间，UTC+8），以无时区对象存入SQLite。"""
+    return datetime.now(CHINA_TZ).replace(tzinfo=None)
+
+def china_today():
+    """返回中国大陆当前日期。"""
+    return china_now().date()
+
+
+def add_months_to_date(value, months=1):
+    """按自然月顺延日期；例如1月31日顺延1个月为2月末。"""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value).date()
+    total_months = value.year * 12 + (value.month - 1) + int(months)
+    year, month_index = divmod(total_months, 12)
+    month = month_index + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
 
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -15,7 +37,7 @@ def connect():
     return conn
 
 def now():
-    return datetime.now().isoformat(timespec="seconds")
+    return china_now().isoformat(timespec="seconds")
 
 def phash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -112,14 +134,11 @@ def init_db():
           ("store","样品管理员赵工",phash("store123"),"样品管理员",1,now()),
         ]
         c.executemany("INSERT OR IGNORE INTO users VALUES(?,?,?,?,?,?)", users)
-        if not c.execute("SELECT 1 FROM customers LIMIT 1").fetchone():
-            c.execute("""INSERT INTO customers(customer_code,name,short_name,notes,enabled,created_at,updated_at)
-                         VALUES('C-DEMO','演示客户（待替换）','演示客户','正式客户库导入后可停用',1,?,?)""",(now(),now()))
-        if not c.execute("SELECT 1 FROM sample_catalog LIMIT 1").fetchone():
-            c.execute("""INSERT INTO sample_catalog(sample_code,name,category,unit,default_experiments,notes,enabled,created_at,updated_at)
-                         VALUES('S-DEMO-01','钴铬合金试样（演示）','金属试样','件','[]','正式样品名称库导入后可停用',1,?,?)""",(now(),now()))
-            c.execute("""INSERT INTO sample_catalog(sample_code,name,category,unit,default_experiments,notes,enabled,created_at,updated_at)
-                         VALUES('S-DEMO-02','氧化锆试样（演示）','陶瓷试样','件','[]','正式样品名称库导入后可停用',1,?,?)""",(now(),now()))
+        # V4.5不再预置演示客户或演示样品名称。
+        # 升级已有数据库时，仅清理旧版本的演示编码。
+        c.execute("DELETE FROM customers WHERE customer_code='C-DEMO'")
+        c.execute("DELETE FROM sample_catalog WHERE sample_code IN ('S-DEMO-01','S-DEMO-02')")
+
 
 def get_user(username):
     with connect() as c:
@@ -136,7 +155,7 @@ def authenticate(username,password):
 
 def create_session(username, days=7):
     token = secrets.token_urlsafe(28)
-    expires = (datetime.now()+timedelta(days=days)).isoformat(timespec="seconds")
+    expires = (china_now()+timedelta(days=days)).isoformat(timespec="seconds")
     with connect() as c:
         c.execute("INSERT INTO auth_sessions VALUES(?,?,?,?)",(token,username,expires,now()))
     return token
@@ -163,7 +182,7 @@ def add_event(sample_no,actor,action,from_status,to_status,from_location,to_loca
         """,(sample_no,actor,action,from_status,to_status,from_location,to_location,details,now()))
 
 def next_sample_no():
-    prefix = datetime.now().strftime("BP-S%Y%m%d-")
+    prefix = china_now().strftime("BP-S%Y%m%d-")
     with connect() as c:
         r=c.execute("SELECT sample_no FROM samples WHERE sample_no LIKE ? ORDER BY sample_no DESC LIMIT 1",(prefix+"%",)).fetchone()
     seq=int(r["sample_no"].split("-")[-1])+1 if r else 1
@@ -243,7 +262,7 @@ def set_task_status(task_no,status):
         c.execute("UPDATE tasks SET status=?,updated_at=? WHERE task_no=?",(status,now(),task_no))
 
 def next_record_no():
-    prefix=datetime.now().strftime("BP-R%Y%m%d-")
+    prefix=china_now().strftime("BP-R%Y%m%d-")
     with connect() as c:
         r=c.execute("SELECT record_no FROM records WHERE record_no LIKE ? ORDER BY record_no DESC LIMIT 1",(prefix+"%",)).fetchone()
     seq=int(r["record_no"].split("-")[-1])+1 if r else 1
@@ -406,7 +425,7 @@ def seed_template(experiment,doc_type,file_name,version="A/0"):
             c.execute("""INSERT INTO template_versions(experiment,doc_type,file_name,version,
               effective_date,status,uploader,uploaded_at,change_note)
               VALUES(?,?,?,?,?,'现行','system',?,'系统初始化')""",
-              (experiment,doc_type,file_name,version,datetime.now().date().isoformat(),now()))
+              (experiment,doc_type,file_name,version,china_today().isoformat(),now()))
 
 def all_template_versions():
     with connect() as c:rows=c.execute("SELECT * FROM template_versions ORDER BY experiment,doc_type,id DESC").fetchall()
@@ -443,7 +462,7 @@ def base_from_sample_no(value):
 
 def next_sample_no(received_date=None):
     from datetime import date as _date
-    d = received_date or _date.today()
+    d = received_date or china_today()
     if isinstance(d, str): d = _date.fromisoformat(d)
     prefix = f"BP{d.strftime('%Y%m%d')}"
     max_seq = 0
