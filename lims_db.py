@@ -134,10 +134,31 @@ def init_db():
           ("store","样品管理员赵工",phash("store123"),"样品管理员",1,now()),
         ]
         c.executemany("INSERT OR IGNORE INTO users VALUES(?,?,?,?,?,?)", users)
-        # V4.5不再预置演示客户或演示样品名称。
-        # 升级已有数据库时，仅清理旧版本的演示编码。
+        # V4.5.1：为入库环节提供一个默认客户和一个默认样品名称。
+        # 正式客户/样品资料可由管理员或收样员在“基础资料”中继续新增。
         c.execute("DELETE FROM customers WHERE customer_code='C-DEMO'")
         c.execute("DELETE FROM sample_catalog WHERE sample_code IN ('S-DEMO-01','S-DEMO-02')")
+
+        c.execute("""
+            INSERT OR IGNORE INTO customers(
+                customer_code,name,short_name,contact,phone,address,notes,
+                enabled,created_at,updated_at
+            ) VALUES(
+                'C-DEFAULT','默认客户','默认客户','','','','用于暂未建立正式客户资料时的入库预设',
+                1,?,?
+            )
+        """,(now(),now()))
+
+        c.execute("""
+            INSERT OR IGNORE INTO sample_catalog(
+                sample_code,name,category,unit,default_experiments,notes,
+                enabled,created_at,updated_at
+            ) VALUES(
+                'S-DEFAULT','默认样品','未分类','件','[]',
+                '用于暂未建立正式样品名称资料时的入库预设',
+                1,?,?
+            )
+        """,(now(),now()))
 
 
 def get_user(username):

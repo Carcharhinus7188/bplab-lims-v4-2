@@ -108,6 +108,7 @@ if page=="首页看板":
 
 elif page=="样品入库":
     header("样品接收、登记和首次入库")
+    st.info("系统已提供“默认客户”和“默认样品”作为入库预设；正式资料建立后可直接选择正式客户和样品名称。")
     customers=list_customers(False);catalog=list_sample_catalog(False)
     if not customers or not catalog:
         st.error("当前没有可选的客户或样品名称。请先进入“基础资料”，由收样员或管理员新增客户信息和样品名称。")
@@ -173,7 +174,7 @@ elif page=="基础资料":
     if role not in ["管理员","收样员"]:
         st.error("仅管理员和收样员可以新增或维护客户信息、样品名称。")
         st.stop()
-    st.info("本模块不依赖初始数据库。收样员和管理员可随时新增客户和样品名称，启用后即可在样品入库页面选择。")
+    st.info("系统已预置“默认客户”和“默认样品”各1项，便于立即入库。收样员和管理员可随时新增正式客户和样品名称。")
     tab1,tab2=st.tabs(["客户信息录入","样品名称录入"])
     with tab1:
         rows=list_customers(True)
