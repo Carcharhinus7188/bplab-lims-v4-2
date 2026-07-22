@@ -7,7 +7,7 @@ from typing import Any, Iterable
 import base64, calendar, hashlib, json, os, re, secrets, sqlite3
 
 ROOT = Path(__file__).parent
-DB_PATH = ROOT / "data" / "bplab_trace_v5.db"
+DB_PATH = ROOT / "data" / "bplab_trace_v52.db"
 ATTACHMENT_DIR = ROOT / "data" / "attachments"
 SIGNATURE_DIR = ROOT / "data" / "signatures"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
@@ -93,12 +93,17 @@ CREATE TABLE IF NOT EXISTS organizations(
   is_contract_manufacturer INTEGER DEFAULT 0, address TEXT, contact TEXT, phone TEXT,
   credit_code TEXT, notes TEXT, enabled INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS experiment_methods(
+  experiment_code TEXT PRIMARY KEY, experiment_name TEXT NOT NULL UNIQUE,
+  method_code TEXT NOT NULL, standard TEXT, category TEXT, kind TEXT,
+  enabled INTEGER DEFAULT 1, sort_order INTEGER DEFAULT 0,
+  created_at TEXT, updated_at TEXT
+);
 CREATE TABLE IF NOT EXISTS sample_catalog(
   id INTEGER PRIMARY KEY AUTOINCREMENT, sample_code TEXT UNIQUE, sample_name TEXT NOT NULL,
-  model TEXT NOT NULL, material_name TEXT NOT NULL, default_org_id INTEGER,
-  category TEXT, unit TEXT DEFAULT '件', default_experiments TEXT DEFAULT '[]',
-  default_methods TEXT DEFAULT '[]', notes TEXT, enabled INTEGER DEFAULT 1,
-  created_at TEXT, updated_at TEXT
+  model TEXT NOT NULL, material_name TEXT NOT NULL,
+  category TEXT, unit TEXT DEFAULT '件', experiment_codes TEXT DEFAULT '[]',
+  notes TEXT, enabled INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS device_presets(
   experiment TEXT PRIMARY KEY, equipment_name TEXT, equipment_model TEXT, equipment_no TEXT,
@@ -107,10 +112,12 @@ CREATE TABLE IF NOT EXISTS device_presets(
 );
 CREATE TABLE IF NOT EXISTS commissions(
   commission_no TEXT PRIMARY KEY, client_org_id INTEGER NOT NULL, client_name TEXT NOT NULL,
-  client_address TEXT, contact TEXT, phone TEXT, commission_date TEXT, due_date TEXT,
-  subcontract_allowed TEXT, report_medium TEXT, conformity_judgment TEXT, uncertainty TEXT,
-  delivery_method TEXT, cnas_mark TEXT, capability TEXT, method_choices TEXT DEFAULT '[]',
-  notes TEXT, status TEXT DEFAULT '已入库', created_by TEXT, created_at TEXT, updated_at TEXT
+  client_address TEXT, contact TEXT, phone TEXT,
+  production_org_id INTEGER NOT NULL, production_org_name TEXT NOT NULL, production_relation TEXT NOT NULL,
+  commission_date TEXT, due_date TEXT, subcontract_allowed TEXT, report_medium TEXT,
+  conformity_judgment TEXT, uncertainty TEXT, delivery_method TEXT, cnas_mark TEXT,
+  capability TEXT, method_choices TEXT DEFAULT '[]', notes TEXT,
+  status TEXT DEFAULT '已入库', created_by TEXT, created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS sample_groups(
   id INTEGER PRIMARY KEY AUTOINCREMENT, group_no TEXT NOT NULL UNIQUE, commission_no TEXT NOT NULL,
@@ -127,21 +134,23 @@ CREATE TABLE IF NOT EXISTS samples(
   status TEXT DEFAULT '待分配', created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS requested_tests(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, experiment TEXT NOT NULL,
-  method_code TEXT, standard TEXT, status TEXT DEFAULT '待分配', task_no TEXT,
-  UNIQUE(group_id, experiment)
+  id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL,
+  experiment_code TEXT NOT NULL, experiment TEXT NOT NULL,
+  method_code TEXT NOT NULL, standard TEXT, status TEXT DEFAULT '待分配', task_no TEXT,
+  UNIQUE(group_id, experiment_code)
 );
 CREATE TABLE IF NOT EXISTS task_packages(
   package_no TEXT PRIMARY KEY, commission_no TEXT NOT NULL, group_id INTEGER NOT NULL,
   group_no TEXT NOT NULL, assignee TEXT NOT NULL, reviewer TEXT NOT NULL,
-  material_name TEXT, sample_nos TEXT, experiments TEXT, status TEXT DEFAULT '待接收',
+  material_name TEXT, sample_nos TEXT, experiment_codes TEXT, experiments TEXT, status TEXT DEFAULT '待接收',
   assigned_by TEXT, assigned_at TEXT, notified_at TEXT, accepted_at TEXT,
   detection_location TEXT, acceptance_result TEXT, acceptance_note TEXT,
   return_submitted_at TEXT, return_confirmed_at TEXT, created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS tasks(
   task_no TEXT PRIMARY KEY, package_no TEXT NOT NULL, commission_no TEXT NOT NULL,
-  group_id INTEGER NOT NULL, group_no TEXT NOT NULL, sample_nos TEXT, experiment TEXT,
+  group_id INTEGER NOT NULL, group_no TEXT NOT NULL, sample_nos TEXT,
+  experiment_code TEXT NOT NULL, experiment TEXT,
   method_code TEXT, standard TEXT, material_name TEXT, assignee TEXT, reviewer TEXT,
   status TEXT DEFAULT '待接收', created_at TEXT, updated_at TEXT
 );
@@ -217,11 +226,25 @@ CREATE TABLE IF NOT EXISTS sample_events(
                ) VALUES('ORG-DEFAULT','默认委托单位','默认单位',1,'','入库预设',1,?,?)""",
             (now(), now()),
         )
+        from constants import EXPERIMENTS
+        for order, (experiment_name, cfg) in enumerate(EXPERIMENTS.items(), 1):
+            c.execute(
+                """INSERT INTO experiment_methods(
+                   experiment_code,experiment_name,method_code,standard,category,kind,enabled,
+                   sort_order,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,1,?,?,?)
+                   ON CONFLICT(experiment_code) DO UPDATE SET
+                   experiment_name=excluded.experiment_name,method_code=excluded.method_code,
+                   standard=excluded.standard,category=excluded.category,kind=excluded.kind,
+                   sort_order=excluded.sort_order,updated_at=excluded.updated_at""",
+                (cfg["key"], experiment_name, cfg["method"], cfg["std"], cfg["category"],
+                 cfg["kind"], order, now(), now()),
+            )
         c.execute(
             """INSERT OR IGNORE INTO sample_catalog(
-               sample_code,sample_name,model,material_name,category,unit,default_experiments,
-               default_methods,notes,enabled,created_at,updated_at
-               ) VALUES('S-DEFAULT','默认样品','默认规格','默认材料','未分类','件','[]','[]','入库预设',1,?,?)""",
+               sample_code,sample_name,model,material_name,category,unit,experiment_codes,
+               notes,enabled,created_at,updated_at
+               ) VALUES('S-DEFAULT','默认样品','默认规格','默认材料','未分类','件','[]','入库预设',1,?,?)""",
             (now(), now()),
         )
 
@@ -308,14 +331,76 @@ def add_organization(data: dict[str, Any], actor: str) -> None:
     audit("organization", data["org_name"], actor, "新增单位")
 
 
-def list_catalog(include_disabled: bool = False) -> list[dict[str, Any]]:
-    q = "SELECT s.*,o.org_name default_org_name FROM sample_catalog s LEFT JOIN organizations o ON o.id=s.default_org_id"
+def list_experiment_methods(include_disabled: bool = False) -> list[dict[str, Any]]:
+    q = "SELECT * FROM experiment_methods"
     if not include_disabled:
-        q += " WHERE s.enabled=1"
-    result = rows(q + " ORDER BY s.sample_name,s.model")
+        q += " WHERE enabled=1"
+    return rows(q + " ORDER BY sort_order,experiment_name")
+
+
+def experiment_method(experiment_code: str) -> dict[str, Any] | None:
+    """Internal lookup retained for relational integrity; not shown to users."""
+    return one("SELECT * FROM experiment_methods WHERE experiment_code=?", (experiment_code,))
+
+
+def experiment_method_by_name(experiment_name: str) -> dict[str, Any] | None:
+    return one("SELECT * FROM experiment_methods WHERE experiment_name=?", (experiment_name,))
+
+
+def _next_internal_experiment_key() -> str:
+    existing = rows("SELECT experiment_code FROM experiment_methods")
+    used = []
+    for item in existing:
+        match = re.fullmatch(r"I(\d+)", str(item.get("experiment_code", "")))
+        if match:
+            used.append(int(match.group(1)))
+    return f"I{(max(used) if used else 0) + 1:03d}"
+
+
+def save_experiment_method(data: dict[str, Any], actor: str) -> None:
+    name = str(data.get("experiment_name", "")).strip()
+    method = str(data.get("method_code", "")).strip()
+    if not name or not method:
+        raise ValueError("实验名称和检测方法不能为空")
+    if method == "其他方法":
+        raise ValueError("检测方法库不允许使用“其他方法”")
+    existing = experiment_method_by_name(name)
+    internal_key = existing["experiment_code"] if existing else _next_internal_experiment_key()
+    with connect() as c:
+        c.execute(
+            """INSERT INTO experiment_methods(
+               experiment_code,experiment_name,method_code,standard,category,kind,enabled,
+               sort_order,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(experiment_code) DO UPDATE SET
+               experiment_name=excluded.experiment_name,method_code=excluded.method_code,
+               standard=excluded.standard,category=excluded.category,kind=excluded.kind,
+               enabled=excluded.enabled,sort_order=excluded.sort_order,updated_at=excluded.updated_at""",
+            (
+                internal_key, name, method, data.get("standard", ""),
+                data.get("category", ""), data.get("kind", ""),
+                int(bool(data.get("enabled", True))),
+                int(data.get("sort_order", 0) or 0), now(), now(),
+            ),
+        )
+    audit(
+        "experiment_method", name, actor, "保存检测项目与方法",
+        new_value=f"{name}｜{method}",
+    )
+
+
+def list_catalog(include_disabled: bool = False) -> list[dict[str, Any]]:
+    q = "SELECT * FROM sample_catalog"
+    if not include_disabled:
+        q += " WHERE enabled=1"
+    result = rows(q + " ORDER BY sample_name,model")
+    mapping = {x["experiment_code"]: x for x in list_experiment_methods(True)}
     for x in result:
-        x["default_experiments_list"] = json.loads(x.get("default_experiments") or "[]")
-        x["default_methods_list"] = json.loads(x.get("default_methods") or "[]")
+        x["experiment_codes_list"] = json.loads(x.get("experiment_codes") or "[]")
+        x["experiment_labels"] = [
+            f"{mapping[code]['experiment_name']}｜{mapping[code]['method_code']}"
+            for code in x["experiment_codes_list"] if code in mapping
+        ]
     return result
 
 
@@ -323,20 +408,22 @@ def add_catalog(data: dict[str, Any], actor: str) -> None:
     for field in ("sample_name", "model", "material_name"):
         if not str(data.get(field, "")).strip():
             raise ValueError(f"{field}不能为空")
+    codes = list(dict.fromkeys(data.get("experiment_codes", [])))
+    enabled_codes = {x["experiment_code"] for x in list_experiment_methods()}
+    invalid = [x for x in codes if x not in enabled_codes]
+    if invalid:
+        raise ValueError("存在无效或停用的检测项目")
     with connect() as c:
         c.execute(
-            """INSERT INTO sample_catalog(sample_code,sample_name,model,material_name,default_org_id,
-               category,unit,default_experiments,default_methods,notes,enabled,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)""",
-            (
-                data.get("sample_code") or None, data["sample_name"].strip(), data["model"].strip(),
-                data["material_name"].strip(), data.get("default_org_id"), data.get("category", ""),
-                data.get("unit", "件"), json.dumps(data.get("default_experiments", []), ensure_ascii=False),
-                json.dumps(data.get("default_methods", []), ensure_ascii=False), data.get("notes", ""), now(), now(),
-            ),
+            """INSERT INTO sample_catalog(
+               sample_code,sample_name,model,material_name,category,unit,experiment_codes,
+               notes,enabled,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,1,?,?)""",
+            (data.get("sample_code") or None,data["sample_name"].strip(),data["model"].strip(),
+             data["material_name"].strip(),data.get("category",""),data.get("unit","件"),
+             json.dumps(codes,ensure_ascii=False),data.get("notes",""),now(),now()),
         )
-    audit("sample_catalog", data["sample_name"], actor, "新增样品资料")
-
+    audit("sample_catalog", data["sample_name"], actor, "新增样品资料", new_value="、".join(codes))
 
 def device_preset(experiment: str) -> dict[str, Any]:
     r = one("SELECT * FROM device_presets WHERE experiment=?", (experiment,)) or {}
@@ -390,72 +477,86 @@ def create_commission(data: dict[str, Any], groups: list[dict[str, Any]], actor:
     if not groups:
         raise ValueError("至少添加一个样品组")
     commission_no = data["commission_no"].strip().upper().replace(" ", "")
+    if not data.get("production_org_id"):
+        raise ValueError("必须统一选择生产单位或受委托生产企业")
     ts = now()
+    selected_methods: list[str] = []
     with connect() as c:
         c.execute(
-            """INSERT INTO commissions(commission_no,client_org_id,client_name,client_address,contact,phone,
-               commission_date,due_date,subcontract_allowed,report_medium,conformity_judgment,uncertainty,
-               delivery_method,cnas_mark,capability,method_choices,notes,status,created_by,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'已入库',?,?,?)""",
-            (
-                commission_no, data["client_org_id"], data["client_name"], data.get("client_address", ""),
-                data.get("contact", ""), data.get("phone", ""), str(data["commission_date"]), str(data["due_date"]),
-                data.get("subcontract_allowed", "否"), data.get("report_medium", "电子档"),
-                data.get("conformity_judgment", "是"), data.get("uncertainty", "否"),
-                data.get("delivery_method", "Email"), data.get("cnas_mark", "否"),
-                data.get("capability", "完全满足"), json.dumps(data.get("method_choices", []), ensure_ascii=False),
-                data.get("notes", ""), actor, ts, ts,
-            ),
+            """INSERT INTO commissions(
+               commission_no,client_org_id,client_name,client_address,contact,phone,
+               production_org_id,production_org_name,production_relation,
+               commission_date,due_date,subcontract_allowed,report_medium,conformity_judgment,
+               uncertainty,delivery_method,cnas_mark,capability,method_choices,notes,status,
+               created_by,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'已入库',?,?,?)""",
+            (commission_no,data["client_org_id"],data["client_name"],data.get("client_address",""),
+             data.get("contact",""),data.get("phone",""),data["production_org_id"],
+             data["production_org_name"],data["production_relation"],str(data["commission_date"]),
+             str(data["due_date"]),data.get("subcontract_allowed","否"),data.get("report_medium","电子档"),
+             data.get("conformity_judgment","是"),data.get("uncertainty","否"),
+             data.get("delivery_method","Email"),data.get("cnas_mark","否"),
+             data.get("capability","完全满足"),"[]",data.get("notes",""),actor,ts,ts),
         )
-        for group in groups:
-            group_no = group["group_no"].strip().upper().replace(" ", "")
-            qty = int(group["quantity"])
+        mapping = {x["experiment_code"]: x for x in list_experiment_methods()}
+        for group_data in groups:
+            group_no = group_data["group_no"].strip().upper().replace(" ", "")
+            qty = int(group_data["quantity"])
             if qty < 1 or qty > 99:
                 raise ValueError("每个样品组数量应为1～99")
+            codes = list(dict.fromkeys(group_data.get("experiment_codes", [])))
+            if not codes:
+                raise ValueError(f"样品组{group_no}未选择检测项目与方法")
+            missing = [code for code in codes if code not in mapping]
+            if missing:
+                raise ValueError("存在无效或已停用的检测项目")
             c.execute(
-                """INSERT INTO sample_groups(group_no,commission_no,catalog_id,sample_name,model,material_name,
-                   production_org_id,production_org_name,production_relation,product_no,quantity,unit,condition,
-                   condition_note,storage_area,notes,status,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '待分配',?,?)""",
-                (
-                    group_no, commission_no, group.get("catalog_id"), group["sample_name"], group["model"],
-                    group["material_name"], group.get("production_org_id"), group.get("production_org_name", ""),
-                    group.get("production_relation", "生产单位"), group.get("product_no", ""), qty,
-                    group.get("unit", "件"), group.get("condition", "完好"), group.get("condition_note", ""),
-                    group.get("storage_area", "A区域"), group.get("notes", ""), ts, ts,
-                ),
+                """INSERT INTO sample_groups(
+                   group_no,commission_no,catalog_id,sample_name,model,material_name,
+                   production_org_id,production_org_name,production_relation,product_no,quantity,
+                   unit,condition,condition_note,storage_area,notes,status,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '待分配',?,?)""",
+                (group_no,commission_no,group_data.get("catalog_id"),group_data["sample_name"],
+                 group_data["model"],group_data["material_name"],data["production_org_id"],
+                 data["production_org_name"],data["production_relation"],group_data.get("product_no",""),
+                 qty,group_data.get("unit","件"),group_data.get("condition","完好"),
+                 group_data.get("condition_note",""),group_data.get("storage_area","A区域"),
+                 group_data.get("notes",""),ts,ts),
             )
             group_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             for i in range(1, qty + 1):
                 sample_no = f"{group_no}-{i:02d}"
                 c.execute(
-                    """INSERT INTO samples(sample_no,group_id,group_no,commission_no,sample_name,model,
-                       material_name,condition,condition_note,current_location,current_holder,status,created_at,updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,'待分配',?,?)""",
-                    (
-                        sample_no, group_id, group_no, commission_no, group["sample_name"], group["model"],
-                        group["material_name"], group.get("condition", "完好"), group.get("condition_note", ""),
-                        group.get("storage_area", "A区域"), actor, ts, ts,
-                    ),
+                    """INSERT INTO samples(
+                       sample_no,group_id,group_no,commission_no,sample_name,model,material_name,
+                       condition,condition_note,current_location,current_holder,status,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'待分配',?,?)""",
+                    (sample_no,group_id,group_no,commission_no,group_data["sample_name"],group_data["model"],
+                     group_data["material_name"],group_data.get("condition","完好"),
+                     group_data.get("condition_note",""),group_data.get("storage_area","A区域"),actor,ts,ts),
                 )
                 c.execute(
-                    """INSERT INTO sample_events(sample_no,actor,action,from_status,to_status,from_location,
-                       to_location,details,created_at) VALUES(?,?,?,'','待分配','',?,?,?)""",
-                    (
-                        sample_no, actor, "样品接收并入库", group.get("storage_area", "A区域"),
-                        f"委托编号:{commission_no};样品状态:{group.get('condition','完好')};备注:{group.get('condition_note','')}", ts,
-                    ),
+                    """INSERT INTO sample_events(
+                       sample_no,actor,action,from_status,to_status,from_location,to_location,details,created_at
+                       ) VALUES(?,?,?,'','待分配','',?,?,?)""",
+                    (sample_no,actor,"样品接收并入库",group_data.get("storage_area","A区域"),
+                     f"委托编号:{commission_no};生产单位:{data['production_org_name']};关系:{data['production_relation']};"
+                     f"样品状态:{group_data.get('condition','完好')};备注:{group_data.get('condition_note','')}",ts),
                 )
-            methods = group.get("methods", [])
-            for experiment in group.get("experiments", []):
-                method = group.get("experiment_methods", {}).get(experiment) or (methods[0] if methods else "")
+            for code in codes:
+                item = mapping[code]
+                selected_methods.append(item["method_code"])
                 c.execute(
-                    "INSERT INTO requested_tests(group_id,experiment,method_code,standard,status) VALUES(?,?,?,?, '待分配')",
-                    (group_id, experiment, method, group.get("standards", {}).get(experiment, "")),
+                    """INSERT INTO requested_tests(
+                       group_id,experiment_code,experiment,method_code,standard,status
+                       ) VALUES(?,?,?,?,?,'待分配')""",
+                    (group_id,code,item["experiment_name"],item["method_code"],item.get("standard","")),
                 )
+        method_choices = list(dict.fromkeys(selected_methods))
+        c.execute("UPDATE commissions SET method_choices=?,updated_at=? WHERE commission_no=?",
+                  (json.dumps(method_choices,ensure_ascii=False),ts,commission_no))
     audit("commission", commission_no, actor, "新建委托并入库", new_value=len(groups))
     return commission_no
-
 
 def list_commissions() -> list[dict[str, Any]]:
     return rows("SELECT * FROM commissions ORDER BY created_at DESC")
@@ -489,7 +590,7 @@ def commission_samples(commission_no: str) -> list[dict[str, Any]]:
 
 
 def requested_tests(group_id: int) -> list[dict[str, Any]]:
-    return rows("SELECT * FROM requested_tests WHERE group_id=? ORDER BY id", (group_id,))
+    return rows("SELECT * FROM requested_tests WHERE group_id=? ORDER BY experiment_code", (group_id,))
 
 
 def void_group(group_id: int, actor: str, reason: str) -> None:
@@ -519,54 +620,89 @@ def _next_package_no(group_no: str) -> str:
     return f"{group_no}-P{seq:02d}"
 
 
-def create_task_package(group_id: int, experiments: list[str], assignee: str, reviewer: str, actor: str) -> str:
-    if not experiments:
+def create_task_package(group_id: int, experiment_codes: list[str], assignee: str, reviewer: str, actor: str) -> str:
+    if not experiment_codes:
         raise ValueError("至少选择一个实验")
     g = group(group_id)
     if not g or g["is_void"]:
         raise ValueError("样品组不可用")
-    available = {x["experiment"]: x for x in requested_tests(group_id) if x["status"] == "待分配"}
-    missing = [x for x in experiments if x not in available]
+    available = {
+        x["experiment_code"]: x
+        for x in requested_tests(group_id)
+        if x["status"] == "待分配"
+    }
+    missing = [x for x in experiment_codes if x not in available]
     if missing:
-        raise ValueError("部分实验已分配或不属于该样品组：" + "、".join(missing))
+        raise ValueError("部分实验已分配或不属于该样品组")
     package_no = _next_package_no(g["group_no"])
     sample_nos = [x["sample_no"] for x in group_samples(group_id)]
+    selected = [available[key] for key in experiment_codes]
+    experiment_names = [x["experiment"] for x in selected]
     ts = now()
     with connect() as c:
         c.execute(
-            """INSERT INTO task_packages(package_no,commission_no,group_id,group_no,assignee,reviewer,
-               material_name,sample_nos,experiments,status,assigned_by,assigned_at,notified_at,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,'待接收',?,?,?,?,?)""",
+            """INSERT INTO task_packages(
+               package_no,commission_no,group_id,group_no,assignee,reviewer,material_name,
+               sample_nos,experiment_codes,experiments,status,assigned_by,assigned_at,
+               notified_at,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,'待接收',?,?,?,?,?)""",
             (
-                package_no, g["commission_no"], group_id, g["group_no"], assignee, reviewer,
-                g["material_name"], json.dumps(sample_nos, ensure_ascii=False),
-                json.dumps(experiments, ensure_ascii=False), actor, ts, ts, ts, ts,
+                package_no, g["commission_no"], group_id, g["group_no"],
+                assignee, reviewer, g["material_name"],
+                json.dumps(sample_nos, ensure_ascii=False),
+                json.dumps(experiment_codes, ensure_ascii=False),
+                json.dumps(experiment_names, ensure_ascii=False),
+                actor, ts, ts, ts, ts,
             ),
         )
-        for idx, experiment in enumerate(experiments, 1):
-            req = available[experiment]
-            task_no = f"{package_no}-E{idx:02d}"
+        for index, req in enumerate(selected, 1):
+            task_no = f"{package_no}-T{index:02d}"
             c.execute(
-                """INSERT INTO tasks(task_no,package_no,commission_no,group_id,group_no,sample_nos,
-                   experiment,method_code,standard,material_name,assignee,reviewer,status,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'待接收',?,?)""",
+                """INSERT INTO tasks(
+                   task_no,package_no,commission_no,group_id,group_no,sample_nos,
+                   experiment_code,experiment,method_code,standard,material_name,
+                   assignee,reviewer,status,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'待接收',?,?)""",
                 (
                     task_no, package_no, g["commission_no"], group_id, g["group_no"],
-                    json.dumps(sample_nos, ensure_ascii=False), experiment, req["method_code"], req["standard"],
-                    g["material_name"], assignee, reviewer, ts, ts,
+                    json.dumps(sample_nos, ensure_ascii=False),
+                    req["experiment_code"], req["experiment"], req["method_code"],
+                    req["standard"], g["material_name"], assignee, reviewer, ts, ts,
                 ),
             )
-            c.execute("UPDATE requested_tests SET status='已分配',task_no=? WHERE id=?", (task_no, req["id"]))
-        c.execute("UPDATE sample_groups SET status='等待实验员接收',updated_at=? WHERE id=?", (ts, group_id))
-        c.execute("UPDATE samples SET status='等待实验员接收',updated_at=? WHERE group_id=?", (ts, group_id))
-        for sample_no in sample_nos:
-            current = one("SELECT current_location FROM samples WHERE sample_no=?", (sample_no,)) or {}
             c.execute(
-                """INSERT INTO sample_events(sample_no,actor,action,from_status,to_status,from_location,to_location,details,created_at)
-                   VALUES(?,?,'任务包下发','待分配','等待实验员接收',?,?,?,?)""",
-                (sample_no, actor, current.get("current_location", ""), current.get("current_location", ""), f"任务包:{package_no};实验:{'、'.join(experiments)};实验员:{assignee}", ts),
+                "UPDATE requested_tests SET status='已分配',task_no=? WHERE id=?",
+                (task_no, req["id"]),
             )
-    audit("task_package", package_no, actor, "下发任务包", new_value="、".join(experiments))
+        c.execute(
+            "UPDATE sample_groups SET status='等待实验员接收',updated_at=? WHERE id=?",
+            (ts, group_id),
+        )
+        c.execute(
+            "UPDATE samples SET status='等待实验员接收',updated_at=? WHERE group_id=?",
+            (ts, group_id),
+        )
+        for sample_no in sample_nos:
+            current = one(
+                "SELECT current_location FROM samples WHERE sample_no=?",
+                (sample_no,),
+            ) or {}
+            c.execute(
+                """INSERT INTO sample_events(
+                   sample_no,actor,action,from_status,to_status,from_location,
+                   to_location,details,created_at
+                   ) VALUES(?,?,'任务包下发','待分配','等待实验员接收',?,?,?,?)""",
+                (
+                    sample_no, actor, current.get("current_location", ""),
+                    current.get("current_location", ""),
+                    f"任务包:{package_no};实验:{'、'.join(experiment_names)};实验员:{assignee}",
+                    ts,
+                ),
+            )
+    audit(
+        "task_package", package_no, actor, "下发任务包",
+        new_value="、".join(experiment_names),
+    )
     return package_no
 
 
@@ -582,6 +718,7 @@ def list_packages(role: str | None = None, username: str | None = None, statuses
     result = rows(q + " ORDER BY updated_at DESC", args)
     for x in result:
         x["sample_nos_list"] = json.loads(x.get("sample_nos") or "[]")
+        x["experiment_codes_list"] = json.loads(x.get("experiment_codes") or "[]")
         x["experiments_list"] = json.loads(x.get("experiments") or "[]")
     return result
 
@@ -590,6 +727,7 @@ def package(package_no: str) -> dict[str, Any] | None:
     r = one("SELECT * FROM task_packages WHERE package_no=?", (package_no,))
     if r:
         r["sample_nos_list"] = json.loads(r.get("sample_nos") or "[]")
+        r["experiment_codes_list"] = json.loads(r.get("experiment_codes") or "[]")
         r["experiments_list"] = json.loads(r.get("experiments") or "[]")
     return r
 

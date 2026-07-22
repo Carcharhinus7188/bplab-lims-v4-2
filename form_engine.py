@@ -54,15 +54,18 @@ def group_range(g):
 def commission_document(c,groups,tests,receiver_name):
     d=Document(TEMPLATE_DIR/"FORM_COMMISSION.docx")
     methods=json.loads(c.get("method_choices") or "[]")
-    options=["YY/T 1936","YY 0300","YY 0621.1","YY 0621.2","YY/T 1702","GB 17168","GB/T 4340.1","GB/T 3851","GB/T 18876.1","YY/T 1937","YY 0270.1","T/GDMDMA 0003","YY 0710","其他方法"]
-    method_text="  ".join(("☑" if x in methods else "□")+x for x in options)
+    options=["YY/T 1936","YY 0300","YY 0621.1","YY 0621.2","YY/T 1702","GB 17168","GB/T 4340.1","GB/T 3851","GB/T 18876.1","YY/T 1937","YY 0270.1","T/GDMDMA 0003","YY 0710"]
+    method_line1="  ".join(("☑" if x in methods else "□")+x for x in options[:7])
+    method_line2="  ".join(("☑" if x in methods else "□")+x for x in options[7:])
     bad=[g for g in groups if g.get("condition")!="完好"]
     bad_note="；".join(f"{g['group_no']}:{g.get('condition_note','')}" for g in bad)
     for p in d.paragraphs:
         _prefix(p,"委托方名称：",c.get("client_name",""));_prefix(p,"委托方地址：",c.get("client_address",""))
         if p.text.strip().startswith("联系人："):_setp(p,f"联系人：{c.get('contact','')}    联系电话：{c.get('phone','')}    委托日期：{c.get('commission_date','')}")
         if "样品外观检查良好" in p.text:_setp(p,f"{'□' if bad else '☑'}样品外观检查良好； {'☑' if bad else '□'}样品外观异常。异常情况说明：{bad_note}")
-        if p.text.strip().startswith("检测方法："):_setp(p,"检测方法："+method_text)
+        if p.text.strip().startswith("检测方法："):_setp(p,"检测方法：")
+        elif "YY/T 1936" in p.text:_setp(p,method_line1)
+        elif "GB/T 3851" in p.text:_setp(p,method_line2)
         if p.text.strip().startswith("1、标普检测资源不满足时"):
             yes=c.get("subcontract_allowed")=="是";_setp(p,f"1、标普检测资源不满足时，是否允许分包？ {'☑是  □否' if yes else '□是  ☑否'}")
         if p.text.strip().startswith("2、样品、相关资料是否保密"):_setp(p,"2、样品、相关资料是否保密？ □是  ☑无要求")
@@ -74,7 +77,7 @@ def commission_document(c,groups,tests,receiver_name):
     for t in tests:tm.setdefault(t["group_no"],[]).append(t["experiment"])
     data=[]
     for i,g in enumerate(groups,1):
-        prod=g.get("production_org_name","")+("（受委托生产企业）" if g.get("production_relation")=="受委托生产企业" else "")
+        prod=c.get("production_org_name","")+("（受委托生产企业）" if c.get("production_relation")=="受委托生产企业" else "")
         data.append([i,f"{g['sample_name']}（{g['model']}）",group_range(g),prod,"、".join(tm.get(g["group_no"],[])),g.get("quantity",1),g.get("notes","") or g.get("condition_note","")])
     _fill(d.tables[0],data)
     return _save(d)
@@ -104,7 +107,7 @@ def _sig(meta):
 
 def report_document(c,groups,samples,tasks,records,report,user_names,signatures):
     d=Document(TEMPLATE_DIR/"FORM_REPORT.docx")
-    names="、".join(dict.fromkeys(g["sample_name"] for g in groups));models="、".join(dict.fromkeys(g["model"] for g in groups));ranges="；".join(group_range(g) for g in groups);products="、".join(dict.fromkeys(g.get("product_no","") for g in groups if g.get("product_no")));prods="、".join(dict.fromkeys(g.get("production_org_name","") for g in groups if g.get("production_org_name")));conds="；".join(f"{g['group_no']}:{g['condition']}" for g in groups)
+    names="、".join(dict.fromkeys(g["sample_name"] for g in groups));models="、".join(dict.fromkeys(g["model"] for g in groups));ranges="；".join(group_range(g) for g in groups);products="、".join(dict.fromkeys(g.get("product_no","") for g in groups if g.get("product_no")));prods=c.get("production_org_name","")+("（受委托生产企业）" if c.get("production_relation")=="受委托生产企业" else "");conds="；".join(f"{g['group_no']}:{g['condition']}" for g in groups)
     for p in d.paragraphs:
         _prefix(p,"报告编号：",report.get("report_no",""));_prefix(p,"委 托 单 位：",c.get("client_name",""));_prefix(p,"地       址：",c.get("client_address",""));_prefix(p,"样 品 名 称：",names);_prefix(p,"型 号/规 格：",models);_prefix(p,"样 品 编 号：",ranges);_prefix(p,"产品编号/批号：",products);_prefix(p,"生 产 单 位：",prods);_prefix(p,"接 收 日 期：",c.get("commission_date",""));_prefix(p,"接 收 状 态：",conds);_prefix(p,"检 验 类 别：",report.get("report_category") or "委托检验");_prefix(p,"报告发布日期：",report.get("publish_date") or "")
         if p.text.strip().startswith("样品情况说明："):_setp(p,"样品情况说明："+(report.get("sample_statement") or ""))

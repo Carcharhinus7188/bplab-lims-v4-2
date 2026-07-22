@@ -48,31 +48,6 @@ SCHEMAS = {
             ("file_no", "曲线/数据文件编号", "text"), ("note", "备注", "text"),
         ],
     },
-    "mc": {
-        "title": "金属-陶瓷结合三点弯曲试验",
-        "sections": [
-            {"title": "环境与设备", "fields": COMMON_ENV_FIELDS + COMMON_DEVICE_FIELDS},
-            {"title": "夹具、软件和试验参数", "fields": [
-                {"key": "machine_sensor", "label": "力传感器编号/量程", "type": "text"},
-                {"key": "fixture_no", "label": "三点弯曲夹具编号", "type": "text"},
-                {"key": "support_span", "label": "支承跨距/mm", "type": "number", "default": 20.0},
-                {"key": "roller_radius", "label": "压头/支点半径/mm", "type": "number", "default": 1.0},
-                {"key": "loading_speed", "label": "加载速度/mm/min", "type": "number", "default": 1.5},
-                {"key": "parallel_check", "label": "上压头与下支承平行性", "type": "select", "options": ["符合", "不符合"]},
-                {"key": "max_gap", "label": "平行块/塞尺最大间隙/mm", "type": "number"},
-                {"key": "zero_force", "label": "清零后力值/N", "type": "number"},
-                {"key": "orientation", "label": "试样放置方向", "type": "select", "options": ["金属面朝上、陶瓷面朝下", "其他"]},
-                {"key": "k_source", "label": "K系数来源/查表记录", "type": "text"},
-            ]},
-        ],
-        "columns": [
-            ("sample_no", "试样编号", "text"), ("width", "宽度/mm", "number"),
-            ("dm1", "金属厚度1/mm", "number"), ("dm2", "金属厚度2/mm", "number"), ("dm3", "金属厚度3/mm", "number"),
-            ("dm_mean", "金属厚度平均/mm", "calc"), ("em", "金属弹性模量/GPa", "number"), ("k", "K/mm⁻²", "number"),
-            ("ffail", "裂纹萌生力/N", "number"), ("tau", "结合强度/MPa", "calc"),
-            ("crack_position", "裂纹萌生位置/状态", "text"), ("conclusion", "单样结论", "calc"), ("file_no", "曲线文件编号", "text"), ("note", "备注", "text"),
-        ],
-    },
     "mc_crack": {
         "title": "金属-陶瓷结合裂纹萌生试验",
         "sections": [

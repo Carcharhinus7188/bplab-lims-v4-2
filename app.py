@@ -131,60 +131,146 @@ elif page=="单位信息库":
             try:add_organization({"org_code":code,"org_name":name,"short_name":short,"is_client":client,"is_manufacturer":manufacturer,"is_contract_manufacturer":contract,"address":address,"contact":contact,"phone":phone,"credit_code":credit,"notes":notes},username);st.rerun()
             except Exception as e:st.error(str(e))
 
+elif page=="检测项目与方法库":
+    header("实验名称与检测方法对应库")
+    if role!="管理员":st.stop()
+    methods=list_experiment_methods(True)
+    show_df(methods,["experiment_name","method_code","standard","category","kind","enabled","sort_order"])
+    st.info("系统只使用“实验名称＋检测方法”作为业务识别，二者自动绑定，不允许错配。")
+    with st.form("method_form",clear_on_submit=True):
+        a,b,c=st.columns(3)
+        name=a.text_input("实验名称")
+        method=b.selectbox("检测方法",METHOD_OPTIONS)
+        standard=c.text_input("检测依据/版本")
+        category=a.text_input("实验类别")
+        kind=b.text_input("内部数据模板",help="收到新SOP和原始记录表后由管理员配置")
+        order=c.number_input("排序",min_value=0,value=100,step=1)
+        enabled=a.checkbox("启用",value=True)
+        if st.form_submit_button("保存实验名称与检测方法",type="primary"):
+            try:
+                save_experiment_method({
+                    "experiment_name":name,"method_code":method,
+                    "standard":standard,"category":category,"kind":kind,
+                    "sort_order":order,"enabled":enabled,
+                },username)
+                st.rerun()
+            except Exception as e:st.error(str(e))
+
 elif page=="样品资料库":
-    header("样品名称、规格型号、材料和默认实验方法资料库")
+    header("样品名称、规格型号、材料和检测项目与方法资料库")
     if role not in ["管理员","样品管理员"]:st.stop()
-    orgs=list_organizations();catalog=list_catalog(True);show_df(catalog,["sample_code","sample_name","model","material_name","default_org_name","category","unit","enabled"])
+    method_rows=list_experiment_methods();method_map={x["experiment_code"]:x for x in method_rows}
+    catalog=list_catalog(True)
+    for item in catalog:item["检测项目与方法"]="；".join(item.get("experiment_labels",[]))
+    show_df(catalog,["sample_code","sample_name","model","material_name","category","unit","检测项目与方法","enabled"])
     with st.form("catalog_form",clear_on_submit=True):
-        a,b,c=st.columns(3);code=a.text_input("样品资料编号");name=b.text_input("样品名称");model=c.text_input("规格型号");material=a.text_input("材料名称");category=b.text_input("类别");unit=c.text_input("单位",value="件")
-        org_id=a.selectbox("默认生产单位（可空）",[None]+[x["id"] for x in orgs],format_func=lambda x:"不预设" if x is None else next(y["org_name"] for y in orgs if y["id"]==x))
-        experiments=st.multiselect("默认检验项目",list(EXPERIMENTS));methods=st.multiselect("默认检测方法（委托单选项）",METHOD_OPTIONS,default=list(dict.fromkeys(EXPERIMENTS[x]["method"] for x in experiments)))
+        a,b,c=st.columns(3)
+        code=a.text_input("样品资料编号");name=b.text_input("样品名称");model=c.text_input("规格型号")
+        material=a.text_input("材料名称");category=b.text_input("类别");unit=c.text_input("单位",value="件")
+        exp_codes=st.multiselect("检测项目与方法",[x["experiment_code"] for x in method_rows],
+            format_func=lambda x:f"{method_map[x]['experiment_name']}｜{method_map[x]['method_code']}")
         notes=st.text_area("备注")
         if st.form_submit_button("保存样品资料",type="primary"):
-            try:add_catalog({"sample_code":code,"sample_name":name,"model":model,"material_name":material,"default_org_id":org_id,"category":category,"unit":unit,"default_experiments":experiments,"default_methods":methods,"notes":notes},username);st.rerun()
+            try:
+                add_catalog({"sample_code":code,"sample_name":name,"model":model,"material_name":material,
+                    "category":category,"unit":unit,"experiment_codes":exp_codes,"notes":notes},username)
+                st.rerun()
             except Exception as e:st.error(str(e))
 
 elif page=="新建委托与入库":
-    header("一份委托单同时录入多个不同样品组")
+    header("一份委托统一选择生产单位，并同时录入多个不同样品组")
     if role not in ["管理员","样品管理员"]:st.stop()
-    orgs=list_organizations();clients=[x for x in orgs if x["is_client"]];producers=[x for x in orgs if x["is_manufacturer"] or x["is_contract_manufacturer"]];catalog=list_catalog()
-    if not clients or not catalog:st.error("请先在单位信息库和样品资料库建立可用资料");st.stop()
+    orgs=list_organizations();clients=[x for x in orgs if x["is_client"]]
+    producers=[x for x in orgs if x["is_manufacturer"] or x["is_contract_manufacturer"]]
+    catalog=list_catalog();method_rows=list_experiment_methods();method_map={x["experiment_code"]:x for x in method_rows}
+    if not clients or not producers or not catalog:
+        st.error("请先建立委托客户、生产单位/受委托生产企业和样品资料");st.stop()
     if "intake_groups" not in st.session_state:st.session_state.intake_groups=[]
     st.subheader("委托主单")
-    a,b,c=st.columns(3);commission_no=a.text_input("检验委托编号（暂行规则）",value=next_commission_no());client_id=b.selectbox("委托客户",[x["id"] for x in clients],format_func=lambda x:next(y["org_name"] for y in clients if y["id"]==x));client=next(x for x in clients if x["id"]==client_id);commission_date=c.date_input("委托/接收日期",china_today());due=a.date_input("计划完成日期",add_months_to_date(commission_date,1));subcontract=b.selectbox("允许分包",["否","是"]);report_medium=c.multiselect("报告载体",["纸质","电子档"],default=["电子档"]);conformity=a.selectbox("符合性判定",["是","否"]);uncertainty=b.selectbox("考虑不确定度",["否","是"]);delivery=c.selectbox("递送方式",["Email","自取","快递"]);cnas=a.selectbox("加盖CNAS章",["否","是"]);capability=b.selectbox("检测能力评价",["完全满足","部分满足","不满足"]);commission_notes=st.text_area("委托备注")
+    a,b,c=st.columns(3)
+    commission_no=a.text_input("检验委托编号（暂行规则）",value=next_commission_no())
+    client_id=b.selectbox("委托客户",[x["id"] for x in clients],format_func=lambda x:next(y["org_name"] for y in clients if y["id"]==x))
+    client=next(x for x in clients if x["id"]==client_id)
+    producer_id=c.selectbox("生产单位/受委托生产企业",[x["id"] for x in producers],format_func=lambda x:next(y["org_name"] for y in producers if y["id"]==x))
+    producer=next(x for x in producers if x["id"]==producer_id)
+    relation=a.selectbox("单位关系",["生产单位","受委托生产企业"])
+    commission_date=b.date_input("委托/接收日期",china_today())
+    due=c.date_input("计划完成日期",add_months_to_date(commission_date,1))
+    subcontract=a.selectbox("允许分包",["否","是"])
+    report_medium=b.multiselect("报告载体",["纸质","电子档"],default=["电子档"])
+    conformity=c.selectbox("符合性判定",["是","否"])
+    uncertainty=a.selectbox("考虑不确定度",["否","是"])
+    delivery=b.selectbox("递送方式",["Email","自取","快递"])
+    cnas=c.selectbox("加盖CNAS章",["否","是"])
+    capability=a.selectbox("检测能力评价",["完全满足","部分满足","不满足"])
+    commission_notes=st.text_area("委托备注")
+    st.info(f"本委托下所有样品统一使用：{producer['org_name']}（{relation}）")
+
     st.subheader("添加样品组")
     with st.form("add_group",clear_on_submit=False):
-        a,b,c=st.columns(3);cat_id=a.selectbox("样品名称/规格型号",[x["id"] for x in catalog],format_func=lambda x:next(f"{y['sample_name']}｜{y['model']}｜{y['material_name']}" for y in catalog if y["id"]==x));cat=next(x for x in catalog if x["id"]==cat_id);prod_id=b.selectbox("生产单位/受委托生产企业",[None]+[x["id"] for x in producers],format_func=lambda x:"未选择" if x is None else next(y["org_name"] for y in producers if y["id"]==x));relation=c.selectbox("单位关系",["生产单位","受委托生产企业"])
-        base_default=increment_base(next_sample_base(),len(st.session_state.intake_groups));group_no=a.text_input("样品组基础编号",value=base_default);qty=int(b.number_input("接收数量（自动生成 -01～-0x）",1,99,1));product_no=c.text_input("产品编号/批号");condition=a.selectbox("样品状态",SAMPLE_CONDITIONS);storage=b.selectbox("入库区域",STORAGE_AREAS);unit=c.text_input("单位",value=cat["unit"]);condition_note=st.text_input("状态备注")
-        experiments=st.multiselect("检验项目",list(EXPERIMENTS),default=cat["default_experiments_list"]);default_methods=list(dict.fromkeys(cat["default_methods_list"]+[EXPERIMENTS[x]["method"] for x in experiments]));methods=st.multiselect("检测方法（直接对应委托单勾选项）",METHOD_OPTIONS,default=[x for x in default_methods if x in METHOD_OPTIONS]);group_notes=st.text_area("样品组备注")
+        a,b,c=st.columns(3)
+        cat_id=a.selectbox("样品名称/规格型号",[x["id"] for x in catalog],
+            format_func=lambda x:next(f"{y['sample_name']}｜{y['model']}｜{y['material_name']}" for y in catalog if y["id"]==x))
+        cat=next(x for x in catalog if x["id"]==cat_id)
+        base_default=increment_base(next_sample_base(),len(st.session_state.intake_groups))
+        group_no=b.text_input("样品组基础编号",value=base_default)
+        qty=int(c.number_input("接收数量（自动生成 -01～-0x）",1,99,1))
+        product_no=a.text_input("产品编号/批号")
+        condition=b.selectbox("样品状态",SAMPLE_CONDITIONS)
+        storage=c.selectbox("入库区域",STORAGE_AREAS)
+        unit=a.text_input("单位",value=cat["unit"])
+        condition_note=b.text_input("状态备注")
+        exp_codes=st.multiselect("检测项目与方法",[x["experiment_code"] for x in method_rows],
+            default=[x for x in cat.get("experiment_codes_list",[]) if x in method_map],
+            format_func=lambda x:f"{method_map[x]['experiment_name']}｜{method_map[x]['method_code']}")
+        group_notes=st.text_area("样品组备注")
         if st.form_submit_button("加入本委托的样品明细"):
             normalized_group=group_no.strip().upper().replace(" ","")
             if not re.fullmatch(r"BP\d{11}",normalized_group):
-                st.error("样品组基础编号必须符合 BP年月日001，例如 BP20260722001")
+                st.error("样品组基础编号必须符合BP年月日001，例如BP20260722001")
             elif any(g["group_no"]==normalized_group for g in st.session_state.intake_groups):
                 st.error("当前委托草稿中已存在相同样品组编号")
-            elif not experiments:
-                st.error("请至少选择一个检验项目")
-            elif not methods:
-                st.error("请至少勾选一个委托单检测方法")
+            elif not exp_codes:
+                st.error("请至少选择一个检测项目与方法")
             else:
-                prod=next((x for x in producers if x["id"]==prod_id),None)
-                experiment_methods={x:(EXPERIMENTS[x]["method"] if EXPERIMENTS[x]["method"] in methods else methods[0]) for x in experiments}
-                st.session_state.intake_groups.append({"group_no":normalized_group,"catalog_id":cat_id,"sample_name":cat["sample_name"],"model":cat["model"],"material_name":cat["material_name"],"production_org_id":prod_id,"production_org_name":prod["org_name"] if prod else "","production_relation":relation,"quantity":qty,"product_no":product_no,"unit":unit,"condition":condition,"condition_note":condition_note,"storage_area":storage,"experiments":experiments,"methods":methods,"experiment_methods":experiment_methods,"standards":{x:EXPERIMENTS[x]["std"] for x in experiments},"notes":group_notes});st.rerun()
+                st.session_state.intake_groups.append({
+                    "group_no":normalized_group,"catalog_id":cat_id,"sample_name":cat["sample_name"],
+                    "model":cat["model"],"material_name":cat["material_name"],"quantity":qty,
+                    "product_no":product_no,"unit":unit,"condition":condition,
+                    "condition_note":condition_note,"storage_area":storage,
+                    "experiment_codes":exp_codes,
+                    "experiment_labels":[f"{method_map[x]['experiment_name']}｜{method_map[x]['method_code']}" for x in exp_codes],
+                    "notes":group_notes,
+                });st.rerun()
     if st.session_state.intake_groups:
-        show_df(st.session_state.intake_groups,["group_no","sample_name","model","material_name","production_org_name","quantity","condition","storage_area","experiments","methods"])
-        remove_index=st.selectbox("删除一条草稿明细",range(len(st.session_state.intake_groups)),format_func=lambda i:f"{i+1}. {st.session_state.intake_groups[i]['group_no']} {st.session_state.intake_groups[i]['sample_name']}")
+        show_df(st.session_state.intake_groups,["group_no","sample_name","model","material_name","quantity","condition","storage_area","experiment_labels"])
+        remove_index=st.selectbox("删除一条草稿明细",range(len(st.session_state.intake_groups)),
+            format_func=lambda i:f"{i+1}. {st.session_state.intake_groups[i]['group_no']} {st.session_state.intake_groups[i]['sample_name']}")
         if st.button("删除所选草稿"):st.session_state.intake_groups.pop(remove_index);st.rerun()
-        st.info("实体编号预览："+"；".join(f"{g['group_no']}-01～{g['group_no']}-{g['quantity']:02d}" if g['quantity']>1 else f"{g['group_no']}-01" for g in st.session_state.intake_groups))
+        st.info("实体编号预览："+"；".join(
+            f"{g['group_no']}-01～{g['group_no']}-{g['quantity']:02d}" if g['quantity']>1 else f"{g['group_no']}-01"
+            for g in st.session_state.intake_groups))
+        selected_methods=list(dict.fromkeys(method_map[c]["method_code"] for g in st.session_state.intake_groups for c in g["experiment_codes"]))
+        st.info("委托单检测方法将自动勾选："+"、".join(selected_methods))
         if st.button("生成同一份委托单并完成全部样品入库",type="primary",use_container_width=True):
-            all_methods=list(dict.fromkeys(m for g in st.session_state.intake_groups for m in g["methods"]));data={"commission_no":commission_no,"client_org_id":client_id,"client_name":client["org_name"],"client_address":client["address"],"contact":client["contact"],"phone":client["phone"],"commission_date":commission_date,"due_date":due,"subcontract_allowed":subcontract,"report_medium":"、".join(report_medium),"conformity_judgment":conformity,"uncertainty":uncertainty,"delivery_method":delivery,"cnas_mark":cnas,"capability":capability,"method_choices":all_methods,"notes":commission_notes}
-            try:create_commission(data,st.session_state.intake_groups,username);st.session_state.intake_groups=[];st.success("委托和全部样品组已入库，可到单据中心下载委托单与样品登记表");st.rerun()
+            data={"commission_no":commission_no,"client_org_id":client_id,"client_name":client["org_name"],
+                "client_address":client["address"],"contact":client["contact"],"phone":client["phone"],
+                "production_org_id":producer_id,"production_org_name":producer["org_name"],
+                "production_relation":relation,"commission_date":commission_date,"due_date":due,
+                "subcontract_allowed":subcontract,"report_medium":"、".join(report_medium),
+                "conformity_judgment":conformity,"uncertainty":uncertainty,"delivery_method":delivery,
+                "cnas_mark":cnas,"capability":capability,"notes":commission_notes}
+            try:
+                create_commission(data,st.session_state.intake_groups,username)
+                st.session_state.intake_groups=[]
+                st.success("委托和全部样品组已入库，实验名称和检测方法已自动绑定")
+                st.rerun()
             except Exception as e:st.error(str(e))
 
 elif page=="委托与样品管理":
-    header("委托、样品组、实体样品和全过程时间轴");cs=list_commissions();show_df(cs,["commission_no","client_name","commission_date","due_date","status","created_by"])
+    header("委托、样品组、实体样品和全过程时间轴");cs=list_commissions();show_df(cs,["commission_no","client_name","production_org_name","production_relation","commission_date","due_date","status","created_by"])
     if cs:
-        cn=st.selectbox("选择委托",[x["commission_no"] for x in cs]);groups=commission_groups(cn,True);show_df(groups,["id","group_no","sample_name","model","material_name","production_org_name","quantity","status","is_void","void_reason"])
+        cn=st.selectbox("选择委托",[x["commission_no"] for x in cs]);groups=commission_groups(cn,True);show_df(groups,["id","group_no","sample_name","model","material_name","quantity","status","is_void","void_reason"])
         active=[g for g in groups if not g["is_void"]]
         if active:
             gid=st.selectbox("查看样品组",[g["id"] for g in active],format_func=lambda x:next(f"{g['group_no']} {g['sample_name']}" for g in active if g["id"]==x));samples0=group_samples(gid);show_df(samples0,["sample_no","sample_name","model","material_name","status","current_location","current_holder"])
@@ -199,9 +285,19 @@ elif page=="任务包分配":
     header("一个样品组多选实验，一次下发、一次领用、一次归还")
     groups=available_groups_for_assignment();show_df(groups,["id","commission_no","group_no","sample_name","model","material_name","pending_count","status"])
     if groups:
-        gid=st.selectbox("样品组",[g["id"] for g in groups],format_func=lambda x:next(f"{g['group_no']} {g['sample_name']}" for g in groups if g["id"]==x));pending=[x for x in requested_tests(gid) if x["status"]=="待分配"];experiments=st.multiselect("本次任务包包含的实验",[x["experiment"] for x in pending],default=[x["experiment"] for x in pending]);testers=role_users("实验人员");reviewers=role_users("复核实验员");a,b=st.columns(2);assignee=a.selectbox("实验员",[x["username"] for x in testers],format_func=display_user);reviewer=b.selectbox("复核员",[x["username"] for x in reviewers],format_func=display_user)
+        gid=st.selectbox("样品组",[g["id"] for g in groups],format_func=lambda x:next(f"{g['group_no']} {g['sample_name']}" for g in groups if g["id"]==x))
+        pending=[x for x in requested_tests(gid) if x["status"]=="待分配"]
+        pending_map={x["experiment_code"]:x for x in pending}
+        experiment_codes=st.multiselect("本次任务包包含的检测项目与方法",list(pending_map),default=list(pending_map),
+            format_func=lambda x:f"{pending_map[x]['experiment']}｜{pending_map[x]['method_code']}")
+        testers=role_users("实验人员");reviewers=role_users("复核实验员")
+        a,b=st.columns(2)
+        assignee=a.selectbox("实验员",[x["username"] for x in testers],format_func=display_user)
+        reviewer=b.selectbox("复核员",[x["username"] for x in reviewers],format_func=display_user)
         if st.button("下发任务包并提醒实验员",type="primary"):
-            try:package_no=create_task_package(gid,experiments,assignee,reviewer,username);st.success(f"任务包 {package_no} 已下发");st.rerun()
+            try:
+                package_no=create_task_package(gid,experiment_codes,assignee,reviewer,username)
+                st.success("已下发："+package_no);st.rerun()
             except Exception as e:st.error(str(e))
 
 elif page=="我的任务包":
@@ -210,7 +306,15 @@ elif page=="我的任务包":
     if packages:
         pn=st.selectbox("选择任务包",[x["package_no"] for x in packages]);p=package(pn);show_df(package_tasks(pn),["task_no","experiment","method_code","standard","material_name","status"])
         if p["status"]=="待接收" and username==p["assignee"]:
-            result=st.radio("样品实物接收确认",["样品已收到，确认完好","样品已收到，但存在异常","尚未收到样品"]);preset_locations=list(dict.fromkeys([device_preset(x).get("default_location","") for x in p["experiments_list"] if device_preset(x).get("default_location")]+DETECTION_LOCATIONS));location=st.selectbox("主要检测位置（由实验员确定）",preset_locations);note=st.text_area("领用/异常备注")
+            result=st.radio("样品实物接收确认",["样品已收到，确认完好","样品已收到，但存在异常","尚未收到样品"])
+            recommended=[device_preset(x).get("default_location","") for x in p["experiments_list"]]
+            recommended=next((x for x in recommended if x in DETECTION_LOCATIONS),DETECTION_LOCATIONS[0])
+            location=st.selectbox(
+                "主要检测位置（由实验员确定）",
+                DETECTION_LOCATIONS,
+                index=DETECTION_LOCATIONS.index(recommended),
+            )
+            note=st.text_area("领用/异常备注")
             if st.button("确认整组样品领用",type="primary"):
                 try:accept_package(pn,username,result,location,note);st.rerun()
                 except Exception as e:st.error(str(e))

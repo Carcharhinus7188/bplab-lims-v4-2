@@ -79,7 +79,7 @@ def calculate_rows(kind: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]
     for raw in rows:
         row = dict(raw)
         try:
-            if kind in ("mc", "mc_crack"):
+            if kind == "mc_crack":
                 vals = [_num(row.get("dm1")), _num(row.get("dm2")), _num(row.get("dm3"))]
                 row["dm_mean"] = round(sum(vals) / 3, 4)
                 row["tau"] = round(_num(row.get("k")) * _num(row.get("ffail")), 2)
