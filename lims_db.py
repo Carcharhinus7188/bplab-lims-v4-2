@@ -221,9 +221,37 @@ CREATE TABLE IF NOT EXISTS sample_events(
                     (username, name, _password_hash(password), role, now()),
                 )
         c.execute(
-            """INSERT OR IGNORE INTO organizations(
-               org_code,org_name,short_name,is_client,address,notes,enabled,created_at,updated_at
-               ) VALUES('ORG-DEFAULT','默认委托单位','默认单位',1,'','入库预设',1,?,?)""",
+            """INSERT INTO organizations(
+               org_code,org_name,short_name,is_client,is_manufacturer,
+               is_contract_manufacturer,address,contact,phone,credit_code,notes,
+               enabled,created_at,updated_at
+               ) VALUES(
+               'ORG-DEFAULT','测试委托客户（预设）','测试客户',1,0,0,
+               '辽宁省大连市测试地址','测试联系人','13800000000','',
+               '用于系统流程测试，可在单位信息库中修改或停用',1,?,?
+               )
+               ON CONFLICT(org_code) DO UPDATE SET
+               org_name=excluded.org_name,short_name=excluded.short_name,
+               is_client=1,is_manufacturer=0,is_contract_manufacturer=0,
+               address=excluded.address,contact=excluded.contact,phone=excluded.phone,
+               notes=excluded.notes,enabled=1,updated_at=excluded.updated_at""",
+            (now(), now()),
+        )
+        c.execute(
+            """INSERT INTO organizations(
+               org_code,org_name,short_name,is_client,is_manufacturer,
+               is_contract_manufacturer,address,contact,phone,credit_code,notes,
+               enabled,created_at,updated_at
+               ) VALUES(
+               'ORG-TEST-MFR','测试生产单位（预设）','测试生产单位',0,1,0,
+               '辽宁省大连市测试生产地址','生产联系人','13900000000','',
+               '用于系统流程测试，可在单位信息库中修改或停用',1,?,?
+               )
+               ON CONFLICT(org_code) DO UPDATE SET
+               org_name=excluded.org_name,short_name=excluded.short_name,
+               is_client=0,is_manufacturer=1,is_contract_manufacturer=0,
+               address=excluded.address,contact=excluded.contact,phone=excluded.phone,
+               notes=excluded.notes,enabled=1,updated_at=excluded.updated_at""",
             (now(), now()),
         )
         from constants import EXPERIMENTS
@@ -240,12 +268,26 @@ CREATE TABLE IF NOT EXISTS sample_events(
                 (cfg["key"], experiment_name, cfg["method"], cfg["std"], cfg["category"],
                  cfg["kind"], order, now(), now()),
             )
+        test_experiments = [
+            EXPERIMENTS["表面粗糙度试验"]["key"],
+            EXPERIMENTS["弯曲性能试验"]["key"],
+            EXPERIMENTS["维氏硬度试验"]["key"],
+        ]
         c.execute(
-            """INSERT OR IGNORE INTO sample_catalog(
+            """INSERT INTO sample_catalog(
                sample_code,sample_name,model,material_name,category,unit,experiment_codes,
                notes,enabled,created_at,updated_at
-               ) VALUES('S-DEFAULT','默认样品','默认规格','默认材料','未分类','件','[]','入库预设',1,?,?)""",
-            (now(), now()),
+               ) VALUES(
+               'S-DEFAULT','测试金属试样（预设）','25 mm×2 mm×2 mm','钴铬合金',
+               '金属试样','件',?,
+               '测试预设：已关联表面粗糙度、弯曲性能和维氏硬度试验',1,?,?
+               )
+               ON CONFLICT(sample_code) DO UPDATE SET
+               sample_name=excluded.sample_name,model=excluded.model,
+               material_name=excluded.material_name,category=excluded.category,
+               unit=excluded.unit,experiment_codes=excluded.experiment_codes,
+               notes=excluded.notes,enabled=1,updated_at=excluded.updated_at""",
+            (json.dumps(test_experiments, ensure_ascii=False), now(), now()),
         )
 
 
