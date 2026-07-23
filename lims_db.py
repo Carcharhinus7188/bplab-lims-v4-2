@@ -1434,8 +1434,8 @@ def _refresh_package_and_report(package_no: str, commission_no: str) -> None:
     commission_unfinished = one("SELECT COUNT(*) n FROM tasks WHERE commission_no=? AND status!='已完成'", (commission_no,))["n"]
     requested_unassigned = one("""SELECT COUNT(*) n FROM requested_tests r JOIN sample_groups g ON g.id=r.group_id
                                   WHERE g.commission_no=? AND g.is_void=0 AND r.status='待分配'""", (commission_no,))["n"]
-    if commission_unfinished == 0 and requested_unassigned == 0:
-        ensure_report(commission_no)
+    # The report is created after the physical return is confirmed. Keeping this check here
+    # only advances the package to "待归还"; report reconciliation is triggered on return.
 
 
 def create_revision(record_no: str, actor: str, reason: str) -> int:
@@ -1517,6 +1517,7 @@ def confirm_package_return(package_no: str, actor: str, items: list[dict[str, An
         c.execute("UPDATE task_packages SET status='已回库',return_confirmed_at=?,updated_at=? WHERE package_no=?", (ts, ts, package_no))
         c.execute("UPDATE sample_groups SET status='留样保存',updated_at=? WHERE id=?", (ts, p["group_id"]))
     audit("task_package", package_no, actor, "确认整组样品回库")
+    ensure_report(p["commission_no"])
 
 
 # ---------------------- Attachments ----------------------
@@ -1588,6 +1589,7 @@ def list_samples() -> list[dict[str, Any]]:
 
 
 def dashboard_counts() -> dict[str, int]:
+    reconcile_eligible_reports()
     return {
         "commissions": one("SELECT COUNT(*) n FROM commissions")["n"],
         "samples": one("SELECT COUNT(*) n FROM samples WHERE status!='已删除'")["n"],
@@ -1606,6 +1608,9 @@ def ensure_report(commission_no: str) -> None:
     tasks0 = rows("SELECT * FROM tasks WHERE commission_no=?", (commission_no,))
     if not tasks0 or any(x["status"] != "已完成" for x in tasks0):
         return
+    packages0 = rows("SELECT status FROM task_packages WHERE commission_no=?", (commission_no,))
+    if not packages0 or any(x["status"] != "已回库" for x in packages0):
+        return
     first = tasks0[0]
     approver = one("SELECT username FROM users WHERE role='批准人' AND enabled=1 ORDER BY username LIMIT 1")
     ts = now()
@@ -1618,11 +1623,27 @@ def ensure_report(commission_no: str) -> None:
         c.execute("INSERT INTO report_actions(report_no,actor,action,comment,created_at) VALUES(?,?,?,'',?)", (commission_no, "system", "生成半成品报告", ts))
 
 
+def reconcile_eligible_reports() -> None:
+    """Idempotently restore report drafts missed by an interrupted return workflow."""
+    candidates = rows(
+        """SELECT DISTINCT c.commission_no
+           FROM commissions c
+           WHERE NOT EXISTS (SELECT 1 FROM reports r WHERE r.commission_no=c.commission_no)
+             AND EXISTS (SELECT 1 FROM tasks t WHERE t.commission_no=c.commission_no)
+             AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.commission_no=c.commission_no AND t.status!='已完成')
+             AND EXISTS (SELECT 1 FROM task_packages p WHERE p.commission_no=c.commission_no)
+             AND NOT EXISTS (SELECT 1 FROM task_packages p WHERE p.commission_no=c.commission_no AND p.status!='已回库')"""
+    )
+    for item in candidates:
+        ensure_report(item["commission_no"])
+
+
 def report(report_no: str) -> dict[str, Any] | None:
     return one("SELECT * FROM reports WHERE report_no=?", (report_no,))
 
 
 def list_reports(role: str, username: str) -> list[dict[str, Any]]:
+    reconcile_eligible_reports()
     if role == "实验人员":
         return rows("SELECT * FROM reports WHERE tester=? ORDER BY updated_at DESC", (username,))
     if role == "复核实验员":

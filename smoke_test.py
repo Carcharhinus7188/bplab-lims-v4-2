@@ -64,7 +64,7 @@ def _demo_business(kind, sample_ids):
     ]
     record["overall_status"]="正常完成";record["deviation"]="无";record["retest"]="否"
     record=calculate_business_record(kind,record)
-    if not record.get("report_summary"):record["report_summary"]="测试结果详见原始记录。"
+    if not record.get("report_summary"):record["report_summary"]="尚未形成有效检验结果。"
     if not record.get("report_conclusion"):record["report_conclusion"]="符合"
     return record
 
@@ -125,6 +125,10 @@ def main():
         lims_db.review_record(task["task_no"],1,"reviewer","通过","通过")
         rec=lims_db.record(task["task_no"],1);final_doc=td/"final_record.docx";final_doc.write_bytes(export_record(rec,snapshot["record_template_file"],[]).getvalue())
         assert _structure(final_doc)==_structure(root/"templates"/snapshot["record_template_file"])
+        lims_db.submit_package_return(pn,"tester",[{"sample_no":sample_no,"condition":"完好","note":""} for sample_no in task["sample_nos_list"]])
+        lims_db.confirm_package_return(pn,"receiver",[{"sample_no":sample_no,"location":"A区域"} for sample_no in task["sample_nos_list"]])
+        assert lims_db.dashboard_counts()["reports"]==1
+        generated_report=lims_db.report(cn);assert generated_report and generated_report["status"]=="待检测员确认"
         attachment_id=lims_db.save_attachment({"commission_no":cn,"package_no":pn,"task_no":task["task_no"],"sample_no":task["sample_nos_list"][0],"attachment_type":"实验过程照片","original_name":"test.jpg","captured_at":"2026-07-23 10:00:00","description":"过程照片","is_original":True},b"test-image-content","tester")
         attachment_rows=lims_db.list_attachments(task_no=task["task_no"]);assert attachment_rows[0]["attachment_id"]==attachment_id;assert "equipment_software" not in attachment_rows[0]
         dynamic=build_internal_trace_workbook(cn);xlsx=td/"trace.xlsx";xlsx.write_bytes(dynamic.getvalue())

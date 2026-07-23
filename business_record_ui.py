@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 from typing import Any
 
 import streamlit as st
@@ -16,11 +17,13 @@ from business_record_engine import (
 from experiment_engine import schema
 
 
-def _safe_number(value: Any, default: float = 0.0) -> float:
+def _safe_number(value: Any, default: float | None = None) -> float | None:
     try:
+        if value in (None, ""):
+            return default
         return float(value)
     except Exception:
-        return float(default)
+        return default
 
 
 def _widget(field: dict[str, Any], value: Any, key: str):
@@ -28,7 +31,20 @@ def _widget(field: dict[str, Any], value: Any, key: str):
     label = field.get("label", field.get("key", "字段"))
     help_text = field.get("help")
     if typ == "number":
-        return st.number_input(label, value=_safe_number(value, field.get("default", 0.0)), key=key, help=help_text)
+        default = field.get("default") if field.get("default") not in ("", None) else None
+        return st.number_input(label, value=_safe_number(value, default), key=key, help=help_text, placeholder="请填写实测值")
+    if typ == "date":
+        parsed = value
+        if isinstance(value, str) and value:
+            try:
+                parsed = date.fromisoformat(value[:10])
+            except ValueError:
+                parsed = date.today()
+        if not parsed:
+            parsed = date.today()
+        return str(st.date_input(label, value=parsed, key=key, help=help_text))
+    if typ == "datetime":
+        return st.text_input(label, value=str(value or ""), key=key, help=help_text or "格式：YYYY-MM-DD HH:MM")
     if typ == "select":
         options = field.get("options") or [""]
         selected = value if value in options else options[0]
@@ -138,10 +154,13 @@ def render_parameters(kind: str, record: dict[str, Any], key_prefix: str) -> tup
     st.subheader("环境与实验参数")
 
     # Actual environmental/time data are always entered or confirmed by the experimenter.
-    env_fields = [x for x in manual_fields if x["key"] in {"temperature", "humidity", "start_time", "end_time"}]
+    env_fields = [x for x in manual_fields if x["key"] in {
+        "test_date", "temperature_before", "temperature_after",
+        "humidity_before", "humidity_after", "start_time", "end_time",
+    }]
     other_manual = [x for x in manual_fields if x not in env_fields]
     if env_fields:
-        cols = st.columns(min(4, len(env_fields)))
+        cols = st.columns(min(3, len(env_fields)))
         for index, field in enumerate(env_fields):
             with cols[index % len(cols)]:
                 params[field["key"]] = _widget(field, params.get(field["key"]), f"{key_prefix}_param_{field['key']}")
@@ -161,12 +180,23 @@ def render_parameters(kind: str, record: dict[str, Any], key_prefix: str) -> tup
                 with cols[index % 3]:
                     params[field["key"]] = _widget(field, params.get(field["key"]), f"{key_prefix}_fixed_edit_{field['key']}")
 
-    if other_manual:
-        st.markdown("**本次实际记录**")
-        cols = st.columns(3)
-        for index, field in enumerate(other_manual):
-            with cols[index % 3]:
-                params[field["key"]] = _widget(field, params.get(field["key"]), f"{key_prefix}_manual_{field['key']}")
+    process_prefixes = ("iqi_gray_", "monitor_", "color_monitor_")
+    process_manual = [field for field in other_manual if field["key"].startswith(process_prefixes)]
+    core_manual = [field for field in other_manual if field not in process_manual]
+    if core_manual:
+        with st.expander("本次核查与实际记录", expanded=True):
+            st.caption("这里只填写仪器核查、过程实测和本次特有信息；前序已录入的数据不会重复询问。")
+            cols = st.columns(3)
+            for index, field in enumerate(core_manual):
+                with cols[index % 3]:
+                    params[field["key"]] = _widget(field, params.get(field["key"]), f"{key_prefix}_manual_{field['key']}")
+    if process_manual:
+        with st.expander("过程监测明细（按原始记录母版）", expanded=False):
+            st.caption("母版要求的重复核查和过程监测集中在这里；正常状态已预设，只需填写本次实际读数与时间。")
+            cols = st.columns(3)
+            for index, field in enumerate(process_manual):
+                with cols[index % 3]:
+                    params[field["key"]] = _widget(field, params.get(field["key"]), f"{key_prefix}_process_{field['key']}")
     return params, fixed_mode
 
 
@@ -177,7 +207,7 @@ def _render_row_field(kind: str, field: tuple[str, str, str], row: dict[str, Any
         st.metric(label, value if value not in (None, "") else "—")
         return value
     if typ == "number":
-        return st.number_input(label, value=_safe_number(value), key=f"{key_prefix}_{key}")
+        return st.number_input(label, value=_safe_number(value), key=f"{key_prefix}_{key}", placeholder="请填写实测值")
     if typ.startswith("select:"):
         options = typ.split(":", 1)[1].split("|")
         selected = value if value in options else options[0]
@@ -207,6 +237,17 @@ def render_sample_data(kind: str, record: dict[str, Any], key_prefix: str) -> li
                 container = st.expander(str(face), expanded=True) if face else st.container(border=True)
                 with container:
                     visible = [f for f in fields if f[0] != "note"]
+                    if kind == "thickness":
+                        measurement = [f for f in visible if f[0].startswith("r")]
+                        summary = [f for f in visible if f not in measurement]
+                        for repeat in range(1, 4):
+                            with st.expander(f"第{repeat}次测量（固定端 / 中点 / 自由端）", expanded=repeat == 1):
+                                repeat_fields = [f for f in measurement if f[0].startswith(f"r{repeat}_")]
+                                repeat_cols = st.columns(3)
+                                for field_index, field in enumerate(repeat_fields):
+                                    with repeat_cols[field_index % 3]:
+                                        row[field[0]] = _render_row_field(kind, field, row, f"{key_prefix}_row_{row_index}")
+                        visible = summary
                     cols = st.columns(3)
                     abnormal = False
                     for field_index, field in enumerate(visible):
@@ -234,12 +275,9 @@ def render_exception_and_summary(kind: str, record: dict[str, Any], key_prefix: 
     retest_options = ["否", "是"]
     output["retest"] = st.radio("是否复测/重制", retest_options, index=1 if output.get("retest") == "是" else 0, horizontal=True, key=f"{key_prefix}_retest")
     output = calculate_business_record(kind, output)
-    output["report_summary"] = st.text_area("检验报告用结果摘要", value=str(output.get("report_summary", "")), key=f"{key_prefix}_summary")
-    conclusion_options = ["符合", "不符合", "仅描述结果", "需复测/技术评审"]
-    current = output.get("report_conclusion") or conclusion_options[0]
-    if current not in conclusion_options:
-        current = "符合" if current in {"合格", "符合"} else ("不符合" if current in {"不合格", "不符合"} else "仅描述结果")
-    output["report_conclusion"] = st.selectbox("检验报告用单项结论", conclusion_options, index=conclusion_options.index(current), key=f"{key_prefix}_conclusion")
+    st.markdown("**系统生成的报告结果**")
+    st.text_area("实际检验结果摘要", value=str(output.get("report_summary", "")), disabled=True, key=f"{key_prefix}_summary")
+    st.text_input("单项结论", value=str(output.get("report_conclusion", "")), disabled=True, key=f"{key_prefix}_conclusion")
     return output
 
 

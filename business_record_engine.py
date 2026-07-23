@@ -23,7 +23,10 @@ HIDDEN_PARAMETER_KEYS = {
 }
 
 # These fields always remain visible because they are actual conditions at the time of testing.
-ALWAYS_EDIT_PARAMETER_KEYS = {"temperature", "humidity", "start_time", "end_time"}
+ALWAYS_EDIT_PARAMETER_KEYS = {
+    "test_date", "temperature_before", "temperature_after",
+    "humidity_before", "humidity_after", "start_time", "end_time",
+}
 
 # File/index fields are filled from the internal trace index rather than manually repeated.
 AUTO_ROW_KEYS = {
@@ -37,12 +40,18 @@ OPTIONAL_PARAMETER_KEYS = {
     "observer_1", "observer_2", "observer_3", "lamp_no", "lamp_hours",
     "filter_no", "filter_hours", "background", "sample_preparation",
     "procedure_summary", "acceptance_criteria", "test_conditions",
+    "spindle_speed", "metal_batch", "em_source_file", "parallel_block_no",
+} | {
+    f"monitor_{point}_note" for point in range(1, 6)
+} | {
+    f"color_monitor_{point}_note" for point in range(1, 7)
 }
 OPTIONAL_ROW_KEYS = {
     "position", "note", "crack_position", "thickness_relation",
     "estimated_thickness", "defect", "edge_condition", "control_no",
     "shape", "size", "cover_method", "cover_direction", "position",
     "measurement_item", "unit", "calculated_value",
+    "retest_mean", "failure_mode", "retake", "cut_start", "cut_end",
 }
 
 PRECHECKS = {
@@ -90,15 +99,41 @@ SELECT_DEFAULTS = {
     "observer1": "未见明显差异",
     "observer2": "未见明显差异",
     "observer3": "未见明显差异",
+    "environment_interference": "无明显干扰",
+    "parameter_adjustment": "无调整",
+    "coolant_status": "是",
+    "remade": "否",
+    "initial_appearance": "无异常",
+    "sample_status": "完好",
+    "retake": "否",
+    "installation_direction": "正确",
+    "sample_secure": "是",
+    "run_status": "正常",
+    "auto_stop": "是",
+    "validity": "有效",
+    "surface_confirm": "符合",
+    "start_permission": "可以开始试验",
+    "indent_measurement_method": "软件自动",
+    "report_exported": "是",
+    "observer_qualification": "均已确认合格",
+    "lamp_box_ready": "已完成",
 }
 
 # Additional aliases for mapping concise business fields back into controlled templates.
 PARAM_ALIASES = {
-    "temperature": ["环境温度", "实验室温度", "检测前温度", "检测后温度", "温度"],
-    "humidity": ["相对湿度", "湿度"],
+    "test_date": ["检测日期", "测量日期", "观察日期"],
+    "temperature_before": ["检测前温度", "试验前", "环境温度"],
+    "temperature_after": ["检测后温度", "试验中", "检查前"],
+    "humidity_before": ["检测前湿度", "相对湿度", "试验前"],
+    "humidity_after": ["检测后湿度", "试验中", "检查前"],
     "start_time": ["检测开始时间", "实验开始时间", "开始时间"],
     "end_time": ["检测结束时间", "实验结束时间", "结束时间"],
     "standard_block": ["标准粗糙度样板", "标准样板", "标准块编号"],
+    "standard_block_nominal": ["标准样板标称值", "标称值"],
+    "standard_block_measured": ["标准样板实测值", "实测值"],
+    "repeat_check_1": ["核查重复性1", "连续测量1"],
+    "repeat_check_2": ["核查重复性2", "连续测量2"],
+    "repeat_check_3": ["核查重复性3", "连续测量3"],
     "standard_block_result": ["标准样板核查结果", "标准硬度块核查结果", "核查结果"],
     "sampling_length": ["取样长度"],
     "evaluation_length": ["评定长度"],
@@ -243,6 +278,14 @@ def initialize_business_record(
 ) -> dict[str, Any]:
     prior = prior or {}
     params = initial_parameters(kind, prior.get("parameters") or {}, detection_location)
+    legacy_temperature = params.get("temperature")
+    legacy_humidity = params.get("humidity")
+    if legacy_temperature not in (None, ""):
+        params.setdefault("temperature_before", legacy_temperature)
+        params.setdefault("temperature_after", legacy_temperature)
+    if legacy_humidity not in (None, ""):
+        params.setdefault("humidity_before", legacy_humidity)
+        params.setdefault("humidity_after", legacy_humidity)
     for section in schema(kind)["sections"]:
         for field in section["fields"]:
             key = field["key"]
@@ -281,6 +324,8 @@ def fixed_and_manual_fields(kind: str) -> tuple[list[dict[str, Any]], list[dict[
                 continue
             if field["key"] in ALWAYS_EDIT_PARAMETER_KEYS:
                 manual.append(field)
+            elif field.get("actual"):
+                manual.append(field)
             elif field.get("default") not in (None, ""):
                 fixed.append(field)
             else:
@@ -297,11 +342,14 @@ def visible_row_fields(kind: str) -> list[tuple[str, str, str]]:
 
 def calculate_business_record(kind: str, record: dict[str, Any]) -> dict[str, Any]:
     output = deepcopy(record)
+    params = output.get("parameters") or {}
+    if kind == "thickness":
+        for row in output.get("rows") or []:
+            row["_design_thickness"] = params.get("design_thickness")
     output["rows"] = calculate_rows(kind, output.get("rows") or [])
-    if not output.get("report_summary") or not output.get("report_conclusion"):
-        summary, conclusion = result_summary(kind, output["rows"])
-        output["report_summary"] = output.get("report_summary") or summary
-        output["report_conclusion"] = output.get("report_conclusion") or conclusion
+    summary, conclusion = result_summary(kind, output["rows"])
+    output["report_summary"] = summary
+    output["report_conclusion"] = conclusion
     return output
 
 
@@ -550,6 +598,16 @@ def business_to_template_fields(
                 values[key] = _select_checkbox_value(original, "")
             continue
 
+    from controlled_template_mappings import apply_controlled_mapping
+
+    values = apply_controlled_mapping(
+        template_name,
+        kind,
+        values,
+        context,
+        business_record,
+        _attachment_reference(attachments),
+    )
     return {k: str(v if v is not None else "") for k, v in values.items()}
 
 

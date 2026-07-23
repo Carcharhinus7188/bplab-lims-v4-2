@@ -1,0 +1,60 @@
+{
+  "records": {
+    "表面粗糙度试验": {
+      "file": "I001_RECORD_R001_ROUGHNESS.docx",
+      "mother_sha256": "4fc9a36a6f9f2ea42d8e77e76eeea58c8b23b540daf6b696d533ba30eb64af15",
+      "mother_structure_preserved": true
+    },
+    "金属-陶瓷结合裂纹萌生试验": {
+      "file": "I002_RECORD_R004_MC_CRACK.docx",
+      "mother_sha256": "9a742094aae6ccee7d5afb3af4b968061f7e178da78e74fad1bc3428b2c65066",
+      "mother_structure_preserved": true
+    },
+    "金属内部质量X射线灰度分析": {
+      "file": "I003_RECORD_R005_XRAY.docx",
+      "mother_sha256": "feda2c38188c89408e70d45180be9a6970783378fd68877a57bd40c63b760cf8",
+      "mother_structure_preserved": true
+    },
+    "翘曲变形试验": {
+      "file": "I004_RECORD_R006_WARPAGE.docx",
+      "mother_sha256": "7b60c443f93ccb9aee703f8e454c7cc676f4206a3b041fe59d93d4155acb75e9",
+      "mother_structure_preserved": true
+    },
+    "热膨胀系数试验": {
+      "file": "I005_RECORD_R007_CTE.docx",
+      "mother_sha256": "b1760ac6cb2a3a83f7f668cbea03b7800e1334e6a14aab1fff2cb86a422aaea1",
+      "mother_structure_preserved": true
+    },
+    "陶瓷牙耐急冷急热试验": {
+      "file": "I006_RECORD_R009_THERMAL_SHOCK.docx",
+      "mother_sha256": "7a895f83e3e0a79427ce823da004e9fe286195e6ecf8bca71fdde6ffc7723e34",
+      "mother_structure_preserved": true
+    },
+    "弯曲性能试验": {
+      "file": "I007_RECORD_R010_BENDING.docx",
+      "mother_sha256": "156493cb6c4dab5dd8e386233c1fc1a17f5e51d3e1eddf22cf9d44ac79ff532a",
+      "mother_structure_preserved": true
+    },
+    "维氏硬度试验": {
+      "file": "I008_RECORD_R011_VICKERS.docx",
+      "mother_sha256": "abb6ed3a94dfe5340cf2559b24e623167733494482c6f5b068da861f15dc5cd8",
+      "mother_structure_preserved": true
+    },
+    "增材制造金属试样厚度测量": {
+      "file": "I009_RECORD_R013_THICKNESS.docx",
+      "mother_sha256": "ad70afebf2e74ea4f2d3b37b0b01daaa91be457ad4173e726931daa54eb2c274",
+      "mother_structure_preserved": true
+    },
+    "牙科材料色稳定性试验": {
+      "file": "I010_RECORD_R012_COLOR_STABILITY.docx",
+      "mother_sha256": "df01bc108c77de9a11d8aeb61a07caf5b4bc13340fe3364d8d0288bd787c7131",
+      "mother_structure_preserved": true
+    }
+  },
+  "report": {
+    "file": "检验报告母版回填测试样例.docx",
+    "mother_sha256": "3a5ff0b91188f537c4612195ae4ad29151c718b269f401b535036179db62b041",
+    "mother_structure_preserved": true,
+    "contains_actual_results": true
+  }
+}

@@ -7,6 +7,7 @@ import json
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from experiment_engine import result_summary
+from report_rules import overall_conclusion, report_item
 
 ROOT=Path(__file__).parent
 TEMPLATE_DIR=ROOT/"templates"
@@ -135,43 +136,161 @@ def _sig(meta):
     p=SIGNATURE_DIR/meta["image_file"];return p if p.exists() else None
 
 
+def _set_existing_text(paragraph, text):
+    """Replace text without removing the template paragraph/run elements."""
+    runs=list(paragraph.runs)
+    if not runs:
+        runs=[paragraph.add_run("")]
+    runs[0].text=str(text or "")
+    runs[0].font.color.rgb=BLACK
+    for run in runs[1:]:
+        run.text=""
+        run.font.color.rgb=BLACK
+
+
+def _prefix_existing(paragraph, prefix, value):
+    if paragraph.text.strip().startswith(prefix):
+        _set_existing_text(paragraph,prefix+("" if value is None else str(value)))
+        return True
+    return False
+
+
+def _set_cell_existing(cell, value):
+    paragraphs=list(cell.paragraphs)
+    paragraph=paragraphs[0] if paragraphs else cell.add_paragraph()
+    _set_existing_text(paragraph,"" if value is None else str(value))
+    for extra in paragraphs[1:]:
+        _set_existing_text(extra,"")
+
+
+def _fill_existing_rows(table, data, header_rows=1):
+    """Fill only rows already present in the controlled report mother."""
+    capacity=max(0,len(table.rows)-header_rows)
+    for offset in range(capacity):
+        values=data[offset] if offset<len(data) else []
+        row=table.rows[header_rows+offset]
+        for col,cell in enumerate(row.cells):
+            _set_cell_existing(cell,values[col] if col<len(values) else "")
+
+
+def _date_range(values):
+    clean=sorted(dict.fromkeys(str(x)[:10] for x in values if x))
+    if not clean:return ""
+    return clean[0] if len(clean)==1 else f"{clean[0]}至{clean[-1]}"
+
+
+def _range_text(values, suffix=""):
+    nums=[]
+    for value in values:
+        try:nums.append(float(value))
+        except Exception:pass
+    if not nums:return ""
+    lo,hi=min(nums),max(nums)
+    def fmt(x):return f"{x:.3f}".rstrip("0").rstrip(".")
+    return f"{fmt(lo)}{suffix}" if lo==hi else f"{fmt(lo)}～{fmt(hi)}{suffix}"
+
+
 def report_document(c,groups,samples,tasks,records,report,user_names,signatures):
     d=Document(TEMPLATE_DIR/"FORM_REPORT.docx")
     names="、".join(dict.fromkeys(g["sample_name"] for g in groups));models="、".join(dict.fromkeys(g["model"] for g in groups));ranges="；".join(group_range(g) for g in groups);products="、".join(dict.fromkeys(g.get("product_no","") for g in groups if g.get("product_no")));prods=c.get("production_org_name","")+("（受委托生产企业）" if c.get("production_relation")=="受委托生产企业" else "");conds="；".join(f"{g['group_no']}:{g['condition']}" for g in groups)
-    for p in d.paragraphs:
-        _prefix(p,"报告编号：",report.get("report_no",""));_prefix(p,"委 托 单 位：",c.get("client_name",""));_prefix(p,"地       址：",c.get("client_address",""));_prefix(p,"样 品 名 称：",names);_prefix(p,"型 号/规 格：",models);_prefix(p,"样 品 编 号：",ranges);_prefix(p,"产品编号/批号：",products);_prefix(p,"生 产 单 位：",prods);_prefix(p,"接 收 日 期：",c.get("commission_date",""));_prefix(p,"接 收 状 态：",conds);_prefix(p,"检 验 类 别：",report.get("report_category") or "委托检验");_prefix(p,"报告发布日期：",report.get("publish_date") or "")
-        if p.text.strip().startswith("样品情况说明："):_setp(p,"样品情况说明："+(report.get("sample_statement") or ""))
-        if p.text.strip().startswith("检验结论："):_setp(p,"检验结论："+(report.get("conclusion") or ""))
-    eq=[];env=[];results=[]
-    for i,t in enumerate(tasks,1):
+    test_dates=[];report_items=[];equipment_map={};environment_by_location={}
+    for t in tasks:
         rec=records.get(t["task_no"])
         if not rec:continue
-        payload=rec["payload"];common=payload.get("common",{});params=payload.get("parameters",{})
-        summary=payload.get("report_summary","")
-        conclusion=payload.get("report_conclusion","")
-        if not summary or not conclusion:
-            legacy_summary,legacy_conclusion=result_summary(t["kind"],payload.get("data",[]))
-            summary=summary or legacy_summary;conclusion=conclusion or legacy_conclusion
-        equipment_rows=payload.get("equipment_snapshot",[])
-        used=[x for x in equipment_rows if x.get("本次使用")=="是"]
-        eq_names="；".join(f"{x.get('设备名称','')}（{x.get('管理编号','')}）" for x in used)
-        eq_models="；".join(x.get("型号规格","") for x in used if x.get("型号规格"))
-        eq.append([eq_names,eq_models,"","","",""])
-        location=(payload.get("configuration_snapshot",{}) or {}).get("default_location","") or params.get("detection_location",common.get("location",""))
-        env.append([location,params.get("temperature",common.get("temperature","")),params.get("humidity",common.get("humidity","")),payload.get("deviation","")])
-        item=f"{t['group_no']} {t.get('sample_name','')}：{t['experiment']}";results.append([i,item,t.get("standard",""),summary,conclusion,payload.get("deviation","")])
-    if len(d.tables)>0:_fill(d.tables[0],eq)
-    if len(d.tables)>1:_fill(d.tables[1],env)
-    if len(d.tables)>2:_fill(d.tables[2],results,2)
+        payload=rec.get("payload") or {}
+        business=payload.get("business_record") or {}
+        params=business.get("parameters") or payload.get("parameters") or {}
+        rows=business.get("rows") or payload.get("data") or []
+        common=payload.get("common") or {}
+        snapshot=payload.get("configuration_snapshot") or {}
+        kind=t.get("kind") or snapshot.get("kind") or "generic"
+        item=report_item(kind,rows)
+        item.update({
+            "task":t,
+            "standard":t.get("standard") or snapshot.get("standard") or t.get("method_code",""),
+            "deviation":business.get("deviation") or payload.get("deviation") or "无",
+        })
+        report_items.append(item)
+        test_dates.append(params.get("test_date") or common.get("test_date"))
+        location=snapshot.get("default_location") or params.get("detection_location") or "未记录地点"
+        env=environment_by_location.setdefault(location,{"temperature":[],"humidity":[],"other":[]})
+        env["temperature"].extend([params.get("temperature_before"),params.get("temperature_after")])
+        env["humidity"].extend([params.get("humidity_before"),params.get("humidity_after")])
+        if params.get("environment_interference"):
+            env["other"].append(str(params.get("environment_interference")))
+        check_map={x.get("management_no"):x for x in business.get("equipment_checks") or []}
+        for eq in snapshot.get("equipment") or []:
+            no=eq.get("management_no","")
+            value=dict(eq);value["usage_status"]=(check_map.get(no) or {}).get("status","正常")
+            equipment_map.setdefault(no or eq.get("equipment_name",""),value)
+
+    auto_statement="；".join(f"{g['group_no']}：接收状态{g.get('condition','完好')}，共{g.get('quantity',1)}件" for g in groups)
+    auto_conclusion=overall_conclusion(report_items)
+    for p in d.paragraphs:
+        if p.text.strip().startswith("生 产 单 位："):
+            _set_existing_text(p,f"生 产 单 位：{prods}    接 收 日 期：{c.get('commission_date','')}")
+            continue
+        _prefix_existing(p,"报告编号：",report.get("report_no",""));_prefix_existing(p,"委 托 单 位：",c.get("client_name",""));_prefix_existing(p,"地       址：",c.get("client_address",""));_prefix_existing(p,"样 品 名 称：",names);_prefix_existing(p,"型 号/规 格：",models);_prefix_existing(p,"样 品 编 号：",ranges);_prefix_existing(p,"产品编号/批号：",products);_prefix_existing(p,"生 产 单 位：",prods);_prefix_existing(p,"接 收 日 期：",c.get("commission_date",""));_prefix_existing(p,"接 收 状 态：",conds);_prefix_existing(p,"检 验 类 别：",report.get("report_category") or "委托检验");_prefix_existing(p,"报告发布日期：",report.get("publish_date") or "")
+        _prefix_existing(p,"检验日期 ：",_date_range(test_dates))
+        if p.text.strip().startswith("需说明的情况:"):_set_existing_text(p,"需说明的情况:"+(report.get("notes") or "无"))
+        if p.text.strip().startswith("样品情况说明："):_set_existing_text(p,"样品情况说明："+(report.get("sample_statement") or auto_statement))
+        if p.text.strip().startswith("检验结论："):_set_existing_text(p,"检验结论："+(report.get("conclusion") or auto_conclusion))
+
+    equipment_rows=[]
+    equipment=list(equipment_map.values())
+    for item in equipment[:5]:
+        equipment_rows.append([
+            f"{item.get('equipment_name','')}（{item.get('management_no','')}）",
+            item.get("model",""),
+            item.get("measuring_range",""),
+            item.get("calibration_certificate") or "台账未配置",
+            item.get("traceability_agency") or "台账未配置",
+            item.get("calibration_due") or (f"台账校准时间：{item.get('calibration_time')}" if item.get("calibration_time") else "台账未配置"),
+        ])
+    environment_rows=[
+        [location,_range_text(data["temperature"]," ℃"),_range_text(data["humidity"]," %RH"),"、".join(dict.fromkeys(data["other"])) or "无"]
+        for location,data in environment_by_location.items()
+    ][:3]
+
+    grouped={}
+    for item in report_items:
+        group_no=item["task"].get("group_no","")
+        grouped.setdefault(group_no,[]).append(item)
+    result_rows=[]
+    for index,(group_no,items) in enumerate(grouped.items(),1):
+        experiments="；".join(f"{x['task'].get('experiment','')}（{x['standard']}）" for x in items)
+        requirements="；".join(dict.fromkeys(x["requirement"] for x in items))
+        actual="；".join(x["result"] for x in items)
+        conclusions=[x["conclusion"] for x in items]
+        conclusion="不符合" if any(x in ("不符合","不合格") for x in conclusions) else ("符合" if all(x in ("符合","合格") for x in conclusions) else "仅描述结果")
+        notes="；".join(dict.fromkeys(x["deviation"] for x in items if x["deviation"] not in ("","无"))) or "无"
+        result_rows.append([index,f"{group_no} {experiments}",requirements,actual,conclusion,notes])
+    if len(result_rows)>3:
+        overflow=result_rows[2:]
+        result_rows=result_rows[:2]+[[
+            3,
+            "；".join(str(x[1]) for x in overflow),
+            "；".join(str(x[2]) for x in overflow),
+            "；".join(str(x[3]) for x in overflow),
+            "不符合" if any(x[4]=="不符合" for x in overflow) else "符合",
+            "；".join(str(x[5]) for x in overflow),
+        ]]
+    if len(d.tables)>0:_fill_existing_rows(d.tables[0],equipment_rows)
+    if len(d.tables)>1:_fill_existing_rows(d.tables[1],environment_rows)
+    if len(d.tables)>2:
+        standards="；".join(dict.fromkeys(item["standard"] for item in report_items if item["standard"]))
+        _set_cell_existing(d.tables[2].rows[0].cells[2],standards)
+        _fill_existing_rows(d.tables[2],result_rows,2)
     for label,field,signed in [("批 准 人","approver","approver_signed_at"),("核 验 员","verifier","verifier_signed_at"),("检 测 员","tester","tester_signed_at")]:
         u=report.get(field);name=user_names.get(u,u or "")
         for p in d.paragraphs:
             if p.text.strip().startswith(label):
-                p.add_run("    "+name)
+                signed_date=str(report.get(signed) or "")[:10]
+                _set_existing_text(p,f"{label}    {name}    {signed_date}")
                 if report.get(signed):
                     path=_sig(signatures.get(u))
                     if path:
-                        try:p.add_run().add_picture(str(path),width=Inches(.85))
+                        try:p.runs[0].add_picture(str(path),width=Inches(.85))
                         except:pass
                 break
     return _save(d)

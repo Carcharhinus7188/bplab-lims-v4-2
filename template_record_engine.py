@@ -498,22 +498,17 @@ def _write_cell_text(cell, original: str, value: Any, changed: bool = False) -> 
     paragraphs = list(cell.paragraphs)
     paragraph = paragraphs[0] if paragraphs else cell.add_paragraph()
     source_run = next((r for p in paragraphs for r in p.runs), None)
-    for p in paragraphs:
-        _clear_runs(p)
-    if not changed:
-        run = paragraph.add_run(text)
-        _clone_rpr(source_run, run)
+    # Keep all paragraph and run elements in place. Replacing/removing those elements can
+    # change tabs, line spacing and page flow in complex controlled Word mothers.
+    runs = [run for p in paragraphs for run in p.runs]
+    if not runs:
+        runs = [paragraph.add_run("")]
+        _clone_rpr(source_run, runs[0])
+    runs[0].text = text
+    runs[0].font.color.rgb = RED if changed else BLACK
+    for run in runs[1:]:
+        run.text = ""
         run.font.color.rgb = BLACK
-        return
-
-    matcher = difflib.SequenceMatcher(a=original, b=text)
-    for tag, a1, a2, b1, b2 in matcher.get_opcodes():
-        segment = text[b1:b2]
-        if not segment:
-            continue
-        run = paragraph.add_run(segment)
-        _clone_rpr(source_run, run)
-        run.font.color.rgb = BLACK if tag == "equal" else RED
 
 
 def fill_exact_template(
