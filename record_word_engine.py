@@ -12,6 +12,9 @@ ROOT=Path(__file__).parent
 TEMPLATE_DIR=ROOT/"templates"
 BLACK=RGBColor(0,0,0);RED=RGBColor(255,0,0)
 
+def _schema(kind):
+    return SCHEMAS.get(kind) or SCHEMAS["generic"]
+
 
 def norm(v):return re.sub(r"\s+","",str(v or "")).replace("：",":").replace("（","(").replace("）",")")
 
@@ -49,7 +52,7 @@ def _common_values(payload):
 
 def _field_labels(kind):
     out={}
-    for section in SCHEMAS[kind]["sections"]:
+    for section in _schema(kind)["sections"]:
         for f in section["fields"]:out[f["key"]]=f["label"]
     return out
 
@@ -81,7 +84,7 @@ def _header_row(table,labels):
 def _fill_data(doc,payload,kind,changed):
     data=payload.get("data") or []
     if not data:return
-    cols=SCHEMAS[kind]["columns"];labels={k:l for k,l,_ in cols};best=None
+    cols=_schema(kind)["columns"];labels={k:l for k,l,_ in cols};best=None
     for table in doc.tables:
         score,ri,hs=_header_row(table,list(labels.values()))
         if best is None or score>best[0]:best=(score,table,ri,hs)
@@ -105,11 +108,22 @@ def _safe_table_grid(table):
 
 
 def _append_details(doc,payload,kind):
-    doc.add_paragraph().add_run("补充过程数据与附件追溯").bold=True
+    doc.add_paragraph().add_run("补充过程数据、设备与附件追溯").bold=True
     t=doc.add_table(rows=1,cols=2);_safe_table_grid(t);t.rows[0].cells[0].text="字段";t.rows[0].cells[1].text="记录值"
     labels=_field_labels(kind)
     for key,value in payload.get("parameters",{}).items():
         cells=t.add_row().cells;cells[0].text=labels.get(key,key);cells[1].text="" if value is None else str(value)
+
+    equipment_rows=payload.get("equipment_snapshot",[])
+    if equipment_rows:
+        doc.add_paragraph().add_run("本次使用设备明细").bold=True
+        e=doc.add_table(rows=1,cols=8);_safe_table_grid(e)
+        headers=["管理编号","设备名称","型号规格","设备角色","必需设备","台账校准时间","本次使用","使用前状态"]
+        for i,h in enumerate(headers):e.rows[0].cells[i].text=h
+        for item in equipment_rows:
+            cells=e.add_row().cells
+            for i,h in enumerate(headers):cells[i].text=str(item.get(h,""))
+
     a=doc.add_table(rows=1,cols=6);_safe_table_grid(a)
     for i,x in enumerate(["附件ID","类型","文件名","样品编号","SHA-256","说明"]):a.rows[0].cells[i].text=x
     for x in payload.get("attachments",[]):
@@ -129,13 +143,13 @@ def _revision(doc,changes,record):
 
 
 def _fallback(record,changes):
-    payload=record["payload"];kind=record["kind"];doc=Document();doc.add_heading(SCHEMAS[kind]["title"],0)
+    payload=record["payload"];kind=record["kind"];doc=Document();doc.add_heading(_schema(kind)["title"],0)
     c=doc.add_table(rows=0,cols=2);_safe_table_grid(c)
     for label,value in _common_values(payload).items():
         if value not in (None,""):
             cells=c.add_row().cells;cells[0].text=label;cells[1].text=str(value)
     _append_details(doc,payload,kind)
-    data=payload.get("data") or [];cols=SCHEMAS[kind]["columns"]
+    data=payload.get("data") or [];cols=_schema(kind)["columns"]
     if data:
         t=doc.add_table(rows=1,cols=len(cols));_safe_table_grid(t)
         for i,(_,label,_) in enumerate(cols):t.rows[0].cells[i].text=label

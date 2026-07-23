@@ -5,7 +5,7 @@ COMPANY_CN = "大连标普检测有限公司"
 COMPANY_EN = "DALIAN BIAOPU TESTING CO., LTD."
 SYSTEM_CN = "大连标普实验室样品全过程追溯系统"
 SYSTEM_EN = "BPLab Sample Lifecycle Tracking System"
-APP_VERSION = "BPLab Trace V5.2.1 测试预设版"
+APP_VERSION = "BPLab Trace V5.4 实验与设备动态配置版"
 TIMEZONE_NAME = "Asia/Shanghai"
 
 STORAGE_AREAS = ["A区域", "B区域"]
@@ -21,6 +21,10 @@ DETECTION_LOCATIONS = [
     "外观检测室",
     "样品室",
 ]
+
+
+EQUIPMENT_LIFECYCLE_STATUSES = ["启用", "停用", "维修", "报废"]
+CONFIG_STATUSES = ["草稿", "现行", "历史"]
 
 ATTACHMENT_TYPES = [
     "电脑截图", "实验过程照片", "仪器曲线", "X射线图像",
@@ -116,7 +120,7 @@ ROLE_MENUS = {
         "新建委托与入库", "委托与样品管理", "任务包分配",
         "我的任务包", "实验记录", "原始记录复核", "样品归还",
         "回库确认", "附件与内部追溯", "单据中心", "报告中心",
-        "修改追踪", "SOP与模板版本", "实验设备预设", "电子签名",
+        "修改追踪", "SOP与模板版本", "实验配置版本", "设备库", "电子签名",
         "用户与权限", "审计追踪",
     ],
     "样品管理员": [

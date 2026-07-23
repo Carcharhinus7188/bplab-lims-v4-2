@@ -10,6 +10,8 @@ from constants import *
 from lims_db import *
 from experiment_engine import schema, initial_parameters, initial_rows, calculate_rows, dataframe, columns_for_editor
 from record_word_engine import export_record
+from equipment_registry import EQUIPMENT_BINDING_ROLES
+from experiment_schemas import SCHEMAS
 from form_engine import commission_document, sample_register_document, loan_return_document, report_document
 
 ROOT=Path(__file__).parent
@@ -132,27 +134,29 @@ elif page=="单位信息库":
             except Exception as e:st.error(str(e))
 
 elif page=="检测项目与方法库":
-    header("实验名称与检测方法对应库")
+    header("动态检测项目与方法库")
     if role!="管理员":st.stop()
     methods=list_experiment_methods(True)
-    show_df(methods,["experiment_name","method_code","standard","category","kind","enabled","sort_order"])
-    st.info("系统只使用“实验名称＋检测方法”作为业务识别，二者自动绑定，不允许错配。")
-    with st.form("method_form",clear_on_submit=True):
+    show_df(methods,["experiment_name","method_code","standard","category","kind","enabled","sort_order","updated_at"])
+    st.info("实验名称和检测方法可以继续增加、停用或调整；对正式任务生效前，应在“实验配置版本”中新建并发布配置。界面不显示内部实验标识。")
+    names=["新增实验"]+[x["experiment_name"] for x in methods]
+    selected=st.selectbox("新增或维护实验",names)
+    current=experiment_method_by_name(selected) if selected!="新增实验" else {}
+    with st.form("method_form"):
         a,b,c=st.columns(3)
-        name=a.text_input("实验名称")
-        method=b.selectbox("检测方法",METHOD_OPTIONS)
-        standard=c.text_input("检测依据/版本")
-        category=a.text_input("实验类别")
-        kind=b.text_input("内部数据模板",help="收到新SOP和原始记录表后由管理员配置")
-        order=c.number_input("排序",min_value=0,value=100,step=1)
-        enabled=a.checkbox("启用",value=True)
-        if st.form_submit_button("保存实验名称与检测方法",type="primary"):
+        name=a.text_input("实验名称",current.get("experiment_name","") if current else "")
+        method=b.text_input("检测方法",current.get("method_code","") if current else "",help="直接填写受控标准/方法名称，不设置“其他方法”选项")
+        standard=c.text_input("检测依据/版本",current.get("standard","") if current else "")
+        category=a.text_input("实验类别",current.get("category","") if current else "")
+        kind_options=list(SCHEMAS.keys())
+        current_kind=(current or {}).get("kind") or "generic"
+        kind=b.selectbox("记录数据模板",kind_options,index=kind_options.index(current_kind) if current_kind in kind_options else kind_options.index("generic"),help="新增实验可先使用generic通用记录，收到SOP和原始记录表后再配置专用模板")
+        order=c.number_input("排序",min_value=0,value=int((current or {}).get("sort_order",100) or 100),step=1)
+        enabled=a.checkbox("启用",value=bool((current or {}).get("enabled",1)))
+        if st.form_submit_button("保存检测项目与方法",type="primary"):
             try:
-                save_experiment_method({
-                    "experiment_name":name,"method_code":method,
-                    "standard":standard,"category":category,"kind":kind,
-                    "sort_order":order,"enabled":enabled,
-                },username)
+                save_experiment_method({"experiment_name":name,"method_code":method,"standard":standard,"category":category,"kind":kind,"sort_order":order,"enabled":enabled},username)
+                st.success("已保存。新增或变更内容需建立配置版本并发布后，才用于新任务。")
                 st.rerun()
             except Exception as e:st.error(str(e))
 
@@ -326,19 +330,69 @@ elif page=="实验记录":
     for p in all_packages:task_list.extend([t for t in package_tasks(p["package_no"]) if t["status"] in ["检测中","退回修改","待复核","更正待复核","已完成"]])
     if not task_list:st.info("暂无可填写实验任务")
     else:
-        tn=st.selectbox("任务/原始记录/复核统一编号",[t["task_no"] for t in task_list],format_func=lambda x:next(f"{t['task_no']}｜{t['experiment']}" for t in task_list if t['task_no']==x));t=task(tn);cfg=EXPERIMENTS[t["experiment"]];kind=cfg["kind"];latest=latest_record(tn)
+        tn=st.selectbox("任务/原始记录/复核统一编号",[t["task_no"] for t in task_list],format_func=lambda x:next(f"{t['task_no']}｜{t['experiment']}" for t in task_list if t['task_no']==x));t=task(tn);config_snapshot=task_config_snapshot(tn);kind=config_snapshot.get("kind") or "generic";latest=latest_record(tn)
         if latest and latest["status"]=="已锁定":st.warning("该记录已锁定。如需更正，请在修改追踪中创建新版本。");st.stop()
         version=latest["version"] if latest else 1;prior=latest["payload"] if latest else {};compare=None
         if version>1:
             versions=record_versions(tn);compare=versions[-2]["payload"] if len(versions)>1 else None
-        preset=device_preset(t["experiment"]);preset_values={"equipment_name":preset.get("equipment_name",""),"equipment_model":preset.get("equipment_model",""),"equipment_no":preset.get("equipment_no",""),"calibration_certificate":preset.get("calibration_certificate",""),"calibration_due":preset.get("calibration_due",""),"software":preset.get("software",""),"detection_location":package(t["package_no"])["detection_location"]}
+        snapshot_equipment=config_snapshot.get("equipment",[])
+        primary=[x for x in snapshot_equipment if x.get("required")] or snapshot_equipment[:1]
+        unique=lambda values:"；".join(dict.fromkeys(str(x) for x in values if str(x).strip()))
+        preset_values={"equipment_name":unique([x.get("equipment_name","") for x in primary]),"equipment_model":unique([x.get("model","") for x in primary]),"equipment_no":unique([x.get("management_no","") for x in primary]),"calibration_certificate":"","calibration_due":unique([x.get("calibration_time","") for x in primary]),"software":config_snapshot.get("software",""),"detection_location":package(t["package_no"])["detection_location"]}
         parameters=prior.get("parameters") or initial_parameters(kind,preset_values,package(t["package_no"])["detection_location"]);sample_ids=t["sample_nos_list"];rows0=prior.get("data") or initial_rows(kind,sample_ids)
-        st.info(f"材料名称：{t['material_name']}（任务下发时快照，实验员不可修改）｜方法：{t['method_code']}｜依据：{t['standard']}")
+        bound_devices=snapshot_equipment
+        equipment_snapshot=prior.get("equipment_snapshot") or [
+            {
+                "管理编号":x["management_no"],
+                "设备名称":x["equipment_name"],
+                "型号规格":x.get("model",""),
+                "测量范围":x.get("measuring_range",""),
+                "设备角色":x.get("binding_role",""),
+                "必需设备":"是" if x.get("required") else "否",
+                "台账校准时间":x.get("calibration_time","") or "未填写",
+                "任务快照状态":x.get("lifecycle_status","") or "未填写",
+                "本次使用":"是" if x["required"] else "否",
+                "使用前状态":"正常",
+                "异常说明":"",
+            }
+            for x in bound_devices
+        ]
+        st.info(f"材料名称：{t['material_name']}（任务下发时快照，实验员不可修改）｜方法：{t['method_code']}｜依据：{t['standard']}｜配置版本：{config_snapshot.get('config_version','')}｜设备快照：{len(bound_devices)}台/件")
         tabs=st.tabs(["①自动信息","②全部过程参数","③原始数据与计算","④异常偏离","⑤附件追溯","⑥保存提交"])
         with tabs[0]:
             st.text_input("任务编号",tn,disabled=True);st.text_input("样品组",t["group_no"],disabled=True);st.text_area("实体样品编号","、".join(sample_ids),disabled=True);st.text_input("材料名称",t["material_name"],disabled=True);st.text_input("检测方法",t["method_code"],disabled=True);st.text_input("检测依据",t["standard"],disabled=True)
         new_params={}
         with tabs[1]:
+            st.subheader("自动绑定设备与使用前确认")
+            equipment_df=st.data_editor(
+                pd.DataFrame(equipment_snapshot),
+                hide_index=True,
+                use_container_width=True,
+                num_rows="fixed",
+                key=f"equipment_{tn}_{version}",
+                column_config={
+                    "管理编号":st.column_config.TextColumn(disabled=True),
+                    "设备名称":st.column_config.TextColumn(disabled=True),
+                    "型号规格":st.column_config.TextColumn(disabled=True),
+                    "测量范围":st.column_config.TextColumn(disabled=True),
+                    "设备角色":st.column_config.TextColumn(disabled=True),
+                    "必需设备":st.column_config.TextColumn(disabled=True),
+                    "台账校准时间":st.column_config.TextColumn(disabled=True),
+                    "任务快照状态":st.column_config.TextColumn(disabled=True),
+                    "本次使用":st.column_config.SelectboxColumn(options=["是","否"]),
+                    "使用前状态":st.column_config.SelectboxColumn(options=["正常","异常","停用"]),
+                    "异常说明":st.column_config.TextColumn(),
+                },
+            )
+            equipment_snapshot=equipment_df.to_dict("records")
+            required_issues=[
+                x for x in equipment_snapshot
+                if x.get("必需设备")=="是" and (
+                    x.get("本次使用")!="是" or x.get("使用前状态")!="正常"
+                )
+            ]
+            if required_issues:
+                st.warning("存在必需设备未使用或状态异常，提交时应在异常偏离中说明。")
             for section in schema(kind)["sections"]:
                 st.subheader(section["title"]);columns=st.columns(3)
                 for i,field in enumerate(section["fields"]):
@@ -347,22 +401,25 @@ elif page=="实验记录":
         with tabs[3]:deviation=st.text_area("异常、偏离、影响评估和处理措施",prior.get("deviation",""));retest=st.selectbox("是否需要复测/重制",["否","是"],index=1 if prior.get("retest")=="是" else 0)
         with tabs[4]:
             attachments=list_attachments(task_no=tn);show_df(attachments,["attachment_id","sample_no","attachment_type","original_name","sha256","captured_at","uploader","description"])
-            atype=st.selectbox("附件类型",ATTACHMENT_TYPES);sample_no=st.selectbox("关联样品编号",[""]+sample_ids);captured=st.text_input("拍摄/生成时间（北京时间）",value=now());equipment=st.text_input("设备或软件");description=st.text_area("附件内容说明");files=st.file_uploader("上传电脑截图、实验过程照片、曲线或原始文件",accept_multiple_files=True,key=f"files_{tn}")
+            atype=st.selectbox("附件类型",ATTACHMENT_TYPES);sample_no=st.selectbox("关联样品编号",[""]+sample_ids);captured=st.text_input("拍摄/生成时间（北京时间）",value=now())
+            equipment_options=[""]+[f"{x['管理编号']}｜{x['设备名称']}" for x in equipment_snapshot if x.get("本次使用")=="是"]
+            equipment=st.selectbox("设备或软件",equipment_options)
+            description=st.text_area("附件内容说明");files=st.file_uploader("上传电脑截图、实验过程照片、曲线或原始文件",accept_multiple_files=True,key=f"files_{tn}")
             if files and st.button("保存附件"):
                 for f in files:save_attachment({"commission_no":t["commission_no"],"package_no":t["package_no"],"task_no":tn,"sample_no":sample_no,"attachment_type":atype,"original_name":f.name,"captured_at":captured,"equipment_software":equipment,"description":description,"is_original":True},f.getvalue(),username)
                 st.success("附件已保存并计算SHA-256校验值");st.rerun()
         with tabs[5]:
-            reason=st.text_area("修改原因（首次记录可不填）",latest.get("change_reason","") if latest else "");tm=active_version(t["experiment"],"原始记录表");sm=active_version(t["experiment"],"SOP");commission0=commission(t["commission_no"]);attachments=list_attachments(task_no=tn)
-            payload={"common":{"record_no":tn,"task_no":tn,"commission_no":t["commission_no"],"report_no":t["commission_no"],"client":commission0["client_name"],"sample_name":group(t["group_id"])["sample_name"],"sample_no":"、".join(sample_ids),"model":group(t["group_id"])["model"],"material":t["material_name"],"method_code":t["method_code"],"standard":t["standard"],"test_date":str(china_today()),"operator":user["display_name"],"reviewer":display_user(t["reviewer"])},"parameters":new_params,"data":new_rows,"deviation":deviation,"retest":retest,"attachments":attachments}
+            reason=st.text_area("修改原因（首次记录可不填）",latest.get("change_reason","") if latest else "");tm_version=config_snapshot.get("record_template_version","") or "A/0";sm_version=config_snapshot.get("sop_version","") or "A/0";commission0=commission(t["commission_no"]);attachments=list_attachments(task_no=tn)
+            payload={"common":{"record_no":tn,"task_no":tn,"commission_no":t["commission_no"],"report_no":t["commission_no"],"client":commission0["client_name"],"sample_name":group(t["group_id"])["sample_name"],"sample_no":"、".join(sample_ids),"model":group(t["group_id"])["model"],"material":t["material_name"],"method_code":t["method_code"],"standard":t["standard"],"test_date":str(china_today()),"operator":user["display_name"],"reviewer":display_user(t["reviewer"])},"parameters":new_params,"equipment_snapshot":equipment_snapshot,"data":new_rows,"deviation":deviation,"retest":retest,"attachments":attachments,"configuration_snapshot":config_snapshot}
             a,b=st.columns(2)
-            if a.button("保存草稿",use_container_width=True):save_record(tn,version,payload,username,"草稿",tm["version"] if tm else "A/0",sm["version"] if sm else "A/0",reason,compare);st.success("草稿已保存")
-            if b.button("提交复核",type="primary",use_container_width=True):save_record(tn,version,payload,username,"更正待复核" if version>1 else "待复核",tm["version"] if tm else "A/0",sm["version"] if sm else "A/0",reason,compare);st.rerun()
+            if a.button("保存草稿",use_container_width=True):save_record(tn,version,payload,username,"草稿",tm_version,sm_version,reason,compare);st.success("草稿已保存")
+            if b.button("提交复核",type="primary",use_container_width=True):save_record(tn,version,payload,username,"更正待复核" if version>1 else "待复核",tm_version,sm_version,reason,compare);st.rerun()
 
 elif page=="原始记录复核":
     header("逐实验原始记录复核")
     rs=pending_reviews(None if role=="管理员" else username);show_df(rs,["record_no","version","package_no","group_no","experiment","owner","status","updated_at"])
     if rs:
-        key=st.selectbox("选择记录",[f"{x['record_no']}|{x['version']}" for x in rs]);rn,v=key.split("|");r=record(rn,int(v));st.subheader("过程参数");show_df([r["payload"].get("parameters",{})]);st.subheader("原始数据");show_df(r["payload"].get("data",[]));st.subheader("附件索引");show_df(r["payload"].get("attachments",[]),["attachment_id","attachment_type","original_name","sha256","description"]);comment=st.text_area("复核意见");a,b=st.columns(2)
+        key=st.selectbox("选择记录",[f"{x['record_no']}|{x['version']}" for x in rs]);rn,v=key.split("|");r=record(rn,int(v));st.subheader("本次使用设备");show_df(r["payload"].get("equipment_snapshot",[]));st.subheader("过程参数");show_df([r["payload"].get("parameters",{})]);st.subheader("原始数据");show_df(r["payload"].get("data",[]));st.subheader("附件索引");show_df(r["payload"].get("attachments",[]),["attachment_id","attachment_type","original_name","sha256","description"]);comment=st.text_area("复核意见");a,b=st.columns(2)
         if a.button("通过并锁定",type="primary"):review_record(rn,int(v),username,"通过",comment);st.rerun()
         if b.button("退回修改"):review_record(rn,int(v),username,"退回",comment);st.rerun()
 
@@ -399,11 +456,11 @@ elif page=="单据中心":
         locked=[]
         for t in commission_tasks(cn):locked.extend([r for r in record_versions(t["task_no"]) if r["status"]=="已锁定"])
         if locked:
-            key=st.selectbox("下载锁定原始记录",[f"{r['record_no']}|{r['version']}" for r in locked]);rn,v=key.split("|");r=record(rn,int(v));t=task(rn);r["kind"]=EXPERIMENTS[t["experiment"]]["kind"];meta=template_for_version(t["experiment"],"原始记录表",r.get("template_version") or "A/0");changes=audit_logs(rn);st.download_button("下载选定原始记录表",export_record(r,meta["file_name"] if meta else EXPERIMENTS[t["experiment"]]["template"],changes),f"{rn}_V{v}_原始记录表.docx")
+            key=st.selectbox("下载锁定原始记录",[f"{r['record_no']}|{r['version']}" for r in locked]);rn,v=key.split("|");r=record(rn,int(v));t=task(rn);snap=task_config_snapshot(rn);r["kind"]=snap.get("kind") or "generic";template_name=snap.get("record_template_file","");changes=audit_logs(rn);st.download_button("下载选定原始记录表",export_record(r,template_name,changes),f"{rn}_V{v}_原始记录表.docx")
         rp=report(cn)
         if rp:
             tasks0=commission_tasks(cn);gmap={g["id"]:g for g in groups}
-            for t in tasks0:t["kind"]=EXPERIMENTS[t["experiment"]]["kind"];t["sample_name"]=gmap[t["group_id"]]["sample_name"]
+            for t in tasks0:t["kind"]=task_config_snapshot(t["task_no"]).get("kind") or "generic";t["sample_name"]=gmap[t["group_id"]]["sample_name"]
             sigs={u:signature(u) for u in users0};st.download_button("下载当前检验报告",report_document(c0,groups,samples0,tasks0,report_records(cn),rp,users0,sigs),f"{cn}_检验报告.docx")
 
 elif page=="报告中心":
@@ -439,17 +496,149 @@ elif page=="修改追踪":
 elif page=="SOP与模板版本":
     header("SOP和实验原始记录表受控版本")
     if role!="管理员":st.stop()
-    show_df(all_template_versions());exp=st.selectbox("实验项目",list(EXPERIMENTS));typ=st.selectbox("文件类型",["SOP","原始记录表"]);ver=st.text_input("版本号","A/1");effective=st.date_input("生效日期",china_today());note=st.text_input("变更说明");f=st.file_uploader("上传DOCX",type=["docx"])
-    if f and st.button("批准并启用",type="primary"):
-        name=f"TPL_{hashlib.sha1((exp+typ+ver+f.name).encode()).hexdigest()[:12]}.docx";(TEMPLATE_DIR/name).write_bytes(f.getvalue());add_template(exp,typ,name,ver,str(effective),username,note);st.rerun()
+    show_df(all_template_versions(),["experiment","doc_type","version","effective_date","status","uploader","uploaded_at","note"])
+    methods=list_experiment_methods(True)
+    if not methods:st.info("请先建立检测项目");st.stop()
+    exp=st.selectbox("实验项目",[x["experiment_name"] for x in methods])
+    typ=st.selectbox("文件类型",["SOP","原始记录表"])
+    ver=st.text_input("版本号","A/1")
+    effective=st.date_input("生效日期",china_today())
+    note=st.text_input("变更说明")
+    f=st.file_uploader("上传DOCX",type=["docx"])
+    if f and st.button("批准并启用文件版本",type="primary"):
+        name=f"TPL_{hashlib.sha1((exp+typ+ver+f.name).encode()).hexdigest()[:12]}.docx"
+        (TEMPLATE_DIR/name).write_bytes(f.getvalue())
+        add_template(exp,typ,name,ver,str(effective),username,note)
+        st.success("文件版本已启用。实验配置是否采用该版本，应在“实验配置版本”中确定。")
+        st.rerun()
 
-elif page=="实验设备预设":
-    header("每个实验预设设备、校准和软件信息")
+elif page=="实验配置版本":
+    header("实验、方法、SOP、记录模板、地点和设备的动态版本配置")
     if role!="管理员":st.stop()
-    exp=st.selectbox("实验项目",list(EXPERIMENTS));p=device_preset(exp);a,b,c=st.columns(3);equipment=a.text_input("设备名称",p.get("equipment_name", ""));model=b.text_input("型号/规格",p.get("equipment_model", ""));number=c.text_input("设备编号",p.get("equipment_no", ""));cert=a.text_input("校准/检定证书编号",p.get("calibration_certificate", ""));due=b.text_input("有效期至",p.get("calibration_due", ""));software=c.text_input("软件/版本",p.get("software", ""));location=a.selectbox("默认检测地点",DETECTION_LOCATIONS,index=DETECTION_LOCATIONS.index(p["default_location"]) if p.get("default_location") in DETECTION_LOCATIONS else 0);extra=st.text_area("其他设备参数预设（说明）",json.dumps(p.get("extra",{}),ensure_ascii=False,indent=2) if p else "{}")
-    if st.button("保存设备预设",type="primary"):
-        try:save_device_preset(exp,{"equipment_name":equipment,"equipment_model":model,"equipment_no":number,"calibration_certificate":cert,"calibration_due":due,"software":software,"default_location":location,"extra":json.loads(extra or "{}")},username);st.rerun()
-        except Exception as e:st.error(str(e))
+    methods=list_experiment_methods(True)
+    method_map={x["experiment_code"]:x for x in methods}
+    show_df(current_config_overview(),["experiment_name","method_code","config_version","kind","default_location","equipment_count","status","enabled"])
+    if not methods:st.info("请先在检测项目与方法库中新建实验");st.stop()
+    selected_code=st.selectbox("选择实验",[x["experiment_code"] for x in methods],format_func=lambda x:f"{method_map[x]['experiment_name']}｜{method_map[x]['method_code']}")
+    configs=list_experiment_configs(selected_code)
+    tabs=st.tabs(["①版本历史","②新建配置草稿","③编辑草稿信息","④配置设备关系","⑤批准发布"])
+    with tabs[0]:
+        show_df(configs,["version","experiment_name","method_code","standard","kind","default_location","sop_version","record_template_version","status","effective_date","created_by","approved_by","approved_at","note"])
+        current=current_experiment_config(selected_code)
+        if current:
+            st.subheader(f"现行配置 {current['version']} 的设备关系")
+            show_df(config_equipment(current["id"],True),["management_no","equipment_name","model","binding_role","required","lifecycle_status","calibration_time","sort_order","note"])
+    with tabs[1]:
+        version=st.text_input("新配置版本号","V1.1")
+        copy_current=st.checkbox("复制现行配置及其设备关系",value=True)
+        if st.button("建立配置草稿",type="primary"):
+            try:
+                cid=create_experiment_config_version(selected_code,version,username,copy_current)
+                st.success(f"已建立草稿，配置ID：{cid}")
+                st.rerun()
+            except Exception as e:st.error(str(e))
+    drafts=[x for x in configs if x["status"]=="草稿"]
+    with tabs[2]:
+        if not drafts:st.info("暂无草稿，请先新建配置草稿")
+        else:
+            cid=st.selectbox("选择草稿",[x["id"] for x in drafts],format_func=lambda x:next(f"{c['version']}｜{c['experiment_name']}" for c in drafts if c["id"]==x),key="edit_config")
+            cfg=experiment_config(cid)
+            sop_versions=[x for x in all_template_versions() if x["experiment"]==cfg["experiment_name"] and x["doc_type"]=="SOP"]
+            record_versions0=[x for x in all_template_versions() if x["experiment"]==cfg["experiment_name"] and x["doc_type"]=="原始记录表"]
+            with st.form("edit_config_form"):
+                a,b,c=st.columns(3)
+                exp_name=a.text_input("实验名称",cfg["experiment_name"])
+                method=b.text_input("检测方法",cfg["method_code"])
+                standard=c.text_input("检测依据/版本",cfg.get("standard","") or "")
+                category=a.text_input("实验类别",cfg.get("category","") or "")
+                kinds=list(SCHEMAS.keys());kind=b.selectbox("记录数据模板",kinds,index=kinds.index(cfg.get("kind") or "generic") if (cfg.get("kind") or "generic") in kinds else kinds.index("generic"))
+                location=c.selectbox("推荐检测地点",[""]+DETECTION_LOCATIONS,index=([""]+DETECTION_LOCATIONS).index(cfg.get("default_location","") or "") if (cfg.get("default_location","") or "") in ([""]+DETECTION_LOCATIONS) else 0)
+                sop_options=[""]+list(dict.fromkeys(x["version"] for x in sop_versions));sop=a.selectbox("SOP版本",sop_options,index=sop_options.index(cfg.get("sop_version","") or "") if (cfg.get("sop_version","") or "") in sop_options else 0)
+                rec_options=[""]+list(dict.fromkeys(x["version"] for x in record_versions0));rec=b.selectbox("原始记录模板版本",rec_options,index=rec_options.index(cfg.get("record_template_version","") or "") if (cfg.get("record_template_version","") or "") in rec_options else 0)
+                software=c.text_input("软件名称/版本",cfg.get("software","") or "")
+                effective=a.date_input("计划生效日期",pd.to_datetime(cfg.get("effective_date") or china_today()).date())
+                note=st.text_area("配置变更说明",cfg.get("note","") or "")
+                if st.form_submit_button("保存配置草稿",type="primary"):
+                    try:
+                        save_experiment_config(cid,{"experiment_name":exp_name,"method_code":method,"standard":standard,"category":category,"kind":kind,"default_location":location,"sop_version":sop,"record_template_version":rec,"software":software,"effective_date":str(effective),"note":note},username)
+                        st.rerun()
+                    except Exception as e:st.error(str(e))
+    with tabs[3]:
+        if not drafts:st.info("暂无可编辑草稿")
+        else:
+            cid=st.selectbox("选择草稿配置",[x["id"] for x in drafts],format_func=lambda x:next(f"{c['version']}｜{c['experiment_name']}" for c in drafts if c["id"]==x),key="bind_config")
+            current_items=config_equipment(cid,True)
+            show_df(current_items,["management_no","equipment_name","model","binding_role","required","lifecycle_status","calibration_time","sort_order","note"])
+            devices=list_equipment(True)
+            dmap={x["management_no"]:x for x in devices}
+            device_no=st.selectbox("选择设备/标准器/夹具",[x["management_no"] for x in devices],format_func=lambda x:f"{x}｜{dmap[x]['equipment_name']}｜{dmap[x].get('lifecycle_status','')}")
+            existing=next((x for x in current_items if x["management_no"]==device_no),{})
+            a,b,c=st.columns(3)
+            roles=EQUIPMENT_BINDING_ROLES
+            bind_role=a.selectbox("配置角色",roles,index=roles.index(existing.get("binding_role")) if existing.get("binding_role") in roles else 0)
+            required=b.checkbox("必需设备",value=bool(existing.get("required",0)))
+            order=c.number_input("排序",min_value=0,value=int(existing.get("sort_order",100) or 100))
+            note=st.text_area("用途/绑定说明",existing.get("note","") or "")
+            x,y=st.columns(2)
+            if x.button("保存配置设备关系",type="primary",use_container_width=True):
+                try:bind_config_equipment(cid,device_no,bind_role,required,order,note,username);st.rerun()
+                except Exception as e:st.error(str(e))
+            if y.button("从该草稿解除设备",use_container_width=True):
+                try:unbind_config_equipment(cid,device_no,username);st.rerun()
+                except Exception as e:st.error(str(e))
+    with tabs[4]:
+        if not drafts:st.info("暂无可发布草稿")
+        else:
+            cid=st.selectbox("选择待发布草稿",[x["id"] for x in drafts],format_func=lambda x:next(f"{c['version']}｜{c['experiment_name']}" for c in drafts if c["id"]==x),key="publish_config")
+            cfg=experiment_config(cid);show_df([cfg]);show_df(config_equipment(cid,True),["management_no","equipment_name","binding_role","required","lifecycle_status","calibration_time","note"])
+            reason=st.text_area("批准/变更原因")
+            st.warning("发布后，新建任务将使用该版本；已经创建的任务继续使用原任务快照，不受影响。")
+            if st.button("批准并发布为现行配置",type="primary"):
+                try:publish_experiment_config(cid,username,reason);st.success("配置已发布");st.rerun()
+                except Exception as e:st.error(str(e))
+
+elif page=="设备库":
+    header("DLBP-CX-P05-R10设备台账动态管理")
+    if role!="管理员":st.stop()
+    devices=list_equipment(True);dmap={x["management_no"]:x for x in devices}
+    a,b,c,d=st.columns(4)
+    a.metric("设备总数",len(devices));b.metric("启用",sum(1 for x in devices if x.get("lifecycle_status")=="启用"));c.metric("维修/停用",sum(1 for x in devices if x.get("lifecycle_status") in ["维修","停用"]));d.metric("报废",sum(1 for x in devices if x.get("lifecycle_status")=="报废"))
+    tabs=st.tabs(["①设备台账","②维护已有设备","③新增设备","④使用关系与审计"])
+    with tabs[0]:
+        show_df(devices,["seq","equipment_name","model","measuring_range","manufacturer","serial_no","management_no","purchase_time","calibration_time","responsible","equipment_class","lifecycle_status","status_note","enabled"])
+        master_df=pd.DataFrame(devices)
+        st.download_button("下载当前设备台账CSV",master_df.to_csv(index=False).encode("utf-8-sig"),"equipment_master_current.csv","text/csv")
+        binding_rows=[]
+        for cfg in [x for x in list_experiment_configs() if x["status"]=="现行"]:
+            for item in config_equipment(cfg["id"],True):
+                binding_rows.append({"实验名称":cfg["experiment_name"],"配置版本":cfg["version"],"默认地点":cfg.get("default_location","") or "","管理编号":item["management_no"],"设备名称":item["equipment_name"],"角色":item["binding_role"],"是否必需":"是" if item["required"] else "否","设备状态":item.get("lifecycle_status","") or "","说明":item.get("note","") or ""})
+        st.download_button("下载现行实验配置设备矩阵CSV",pd.DataFrame(binding_rows).to_csv(index=False).encode("utf-8-sig"),"current_experiment_equipment_matrix.csv","text/csv")
+    with tabs[1]:
+        selected=st.selectbox("选择设备",[x["management_no"] for x in devices],format_func=lambda x:f"{x}｜{dmap[x]['equipment_name']}")
+        item=equipment_item(selected) or {}
+        with st.form("equipment_edit"):
+            a,b,c=st.columns(3)
+            seq=a.number_input("序号",min_value=1,value=int(item.get("seq",1) or 1));name=b.text_input("名称",item.get("equipment_name","") or "");model=c.text_input("规格型号",item.get("model","") or "")
+            rng=a.text_area("测量范围",item.get("measuring_range","") or "");manufacturer=b.text_input("生产厂家",item.get("manufacturer","") or "");serial=c.text_input("出厂编号",item.get("serial_no","") or "")
+            management=a.text_input("管理编号",item.get("management_no","") or "",disabled=True);purchase=b.text_input("购置时间",item.get("purchase_time","") or "");calibration=c.text_input("校准时间",item.get("calibration_time","") or "")
+            responsible=a.text_input("责任人",item.get("responsible","") or "");cls=b.selectbox("分类",["A类","B类","C类"],index=["A类","B类","C类"].index(item.get("equipment_class","A类")) if item.get("equipment_class") in ["A类","B类","C类"] else 0);status=c.selectbox("设备状态",EQUIPMENT_LIFECYCLE_STATUSES,index=EQUIPMENT_LIFECYCLE_STATUSES.index(item.get("lifecycle_status","启用")) if item.get("lifecycle_status") in EQUIPMENT_LIFECYCLE_STATUSES else 0)
+            status_note=st.text_input("状态说明",item.get("status_note","") or "");notes=st.text_area("备注",item.get("notes","") or "")
+            if st.form_submit_button("保存设备资料",type="primary"):
+                save_equipment({"seq":seq,"equipment_name":name,"model":model,"measuring_range":rng,"manufacturer":manufacturer,"serial_no":serial,"management_no":management,"purchase_time":purchase,"calibration_time":calibration,"responsible":responsible,"equipment_class":cls,"lifecycle_status":status,"status_note":status_note,"enabled":status=="启用","notes":notes},username);st.rerun()
+    with tabs[2]:
+        with st.form("equipment_add"):
+            a,b,c=st.columns(3)
+            management=a.text_input("管理编号");name=b.text_input("名称");seq=c.number_input("序号",min_value=1,value=max([int(x.get("seq",0) or 0) for x in devices]+[0])+1)
+            model=a.text_input("规格型号");rng=b.text_area("测量范围");manufacturer=c.text_input("生产厂家")
+            serial=a.text_input("出厂编号");purchase=b.text_input("购置时间");calibration=c.text_input("校准时间")
+            responsible=a.text_input("责任人");cls=b.selectbox("分类",["A类","B类","C类"]);status=c.selectbox("设备状态",EQUIPMENT_LIFECYCLE_STATUSES)
+            status_note=st.text_input("状态说明");notes=st.text_area("备注")
+            if st.form_submit_button("新增设备",type="primary"):
+                try:save_equipment({"seq":seq,"equipment_name":name,"model":model,"measuring_range":rng,"manufacturer":manufacturer,"serial_no":serial,"management_no":management,"purchase_time":purchase,"calibration_time":calibration,"responsible":responsible,"equipment_class":cls,"lifecycle_status":status,"status_note":status_note,"enabled":status=="启用","notes":notes},username);st.rerun()
+                except Exception as e:st.error(str(e))
+    with tabs[3]:
+        st.info("设备变化不会回写历史任务。历史任务保存的是创建任务时的设备、校准状态和配置版本快照。")
+        show_df(audit_logs(),["entity_type","entity_id","action","old_value","new_value","reason","actor","created_at"])
 
 elif page=="电子签名":
     header("电子签名库")

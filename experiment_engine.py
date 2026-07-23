@@ -7,12 +7,12 @@ from experiment_schemas import SCHEMAS
 
 
 def schema(kind: str) -> dict[str, Any]:
-    return SCHEMAS[kind]
+    return SCHEMAS.get(kind) or SCHEMAS["generic"]
 
 
 def initial_parameters(kind: str, preset: dict[str, Any] | None = None, detection_location: str = "") -> dict[str, Any]:
     values: dict[str, Any] = {}
-    for section in SCHEMAS[kind]["sections"]:
+    for section in schema(kind)["sections"]:
         for field in section["fields"]:
             key = field["key"]
             default = field.get("default", "")
@@ -28,9 +28,9 @@ def initial_parameters(kind: str, preset: dict[str, Any] | None = None, detectio
 
 def initial_rows(kind: str, sample_ids: list[str]) -> list[dict[str, Any]]:
     ids = sample_ids or [""]
-    columns = SCHEMAS[kind]["columns"]
+    columns = schema(kind)["columns"]
     rows: list[dict[str, Any]] = []
-    if SCHEMAS[kind].get("row_expansion") == "faces":
+    if schema(kind).get("row_expansion") == "faces":
         for sid in ids:
             for face in ["面1", "面2"]:
                 row = {key: _default_for_column(kind, key, ctype) for key, _, ctype in columns}
@@ -66,11 +66,11 @@ def _default_for_column(kind: str, key: str, ctype: str) -> Any:
 
 
 def columns_for_editor(kind: str) -> list[dict[str, str]]:
-    return [{"key": key, "label": label, "type": ctype} for key, label, ctype in SCHEMAS[kind]["columns"]]
+    return [{"key": key, "label": label, "type": ctype} for key, label, ctype in schema(kind)["columns"]]
 
 
 def dataframe(kind: str, rows: list[dict[str, Any]]) -> pd.DataFrame:
-    cols = [x[0] for x in SCHEMAS[kind]["columns"]]
+    cols = [x[0] for x in schema(kind)["columns"]]
     return pd.DataFrame(rows)[cols]
 
 

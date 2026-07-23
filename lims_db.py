@@ -7,7 +7,7 @@ from typing import Any, Iterable
 import base64, calendar, hashlib, json, os, re, secrets, sqlite3
 
 ROOT = Path(__file__).parent
-DB_PATH = ROOT / "data" / "bplab_trace_v52.db"
+DB_PATH = ROOT / "data" / "bplab_trace_v54.db"
 ATTACHMENT_DIR = ROOT / "data" / "attachments"
 SIGNATURE_DIR = ROOT / "data" / "signatures"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
@@ -109,6 +109,38 @@ CREATE TABLE IF NOT EXISTS device_presets(
   experiment TEXT PRIMARY KEY, equipment_name TEXT, equipment_model TEXT, equipment_no TEXT,
   calibration_certificate TEXT, calibration_due TEXT, software TEXT, default_location TEXT,
   extra_json TEXT DEFAULT '{}', updated_by TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS equipment_registry(
+  management_no TEXT PRIMARY KEY, seq INTEGER, equipment_name TEXT NOT NULL,
+  model TEXT, measuring_range TEXT, manufacturer TEXT, serial_no TEXT,
+  purchase_time TEXT, calibration_time TEXT, responsible TEXT,
+  equipment_class TEXT, enabled INTEGER DEFAULT 1, lifecycle_status TEXT DEFAULT '启用',
+  status_note TEXT, notes TEXT, created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS experiment_equipment_bindings(
+  experiment TEXT NOT NULL, management_no TEXT NOT NULL, binding_role TEXT NOT NULL,
+  required INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, note TEXT,
+  created_at TEXT, updated_at TEXT,
+  PRIMARY KEY(experiment, management_no)
+);
+CREATE TABLE IF NOT EXISTS experiment_config_versions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, experiment_code TEXT NOT NULL,
+  version TEXT NOT NULL, experiment_name TEXT NOT NULL, method_code TEXT NOT NULL,
+  standard TEXT, category TEXT, kind TEXT DEFAULT 'generic', default_location TEXT,
+  sop_version TEXT, record_template_version TEXT, software TEXT,
+  status TEXT DEFAULT '草稿', effective_date TEXT, note TEXT,
+  created_by TEXT, created_at TEXT, approved_by TEXT, approved_at TEXT,
+  UNIQUE(experiment_code, version)
+);
+CREATE TABLE IF NOT EXISTS experiment_config_equipment(
+  config_id INTEGER NOT NULL, management_no TEXT NOT NULL, binding_role TEXT NOT NULL,
+  required INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, note TEXT,
+  created_at TEXT, updated_at TEXT,
+  PRIMARY KEY(config_id, management_no)
+);
+CREATE TABLE IF NOT EXISTS task_config_snapshots(
+  task_no TEXT PRIMARY KEY, config_id INTEGER, config_version TEXT,
+  snapshot_json TEXT NOT NULL, snapshot_hash TEXT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS commissions(
   commission_no TEXT PRIMARY KEY, client_org_id INTEGER NOT NULL, client_name TEXT NOT NULL,
@@ -261,13 +293,80 @@ CREATE TABLE IF NOT EXISTS sample_events(
                    experiment_code,experiment_name,method_code,standard,category,kind,enabled,
                    sort_order,created_at,updated_at
                    ) VALUES(?,?,?,?,?,?,1,?,?,?)
-                   ON CONFLICT(experiment_code) DO UPDATE SET
-                   experiment_name=excluded.experiment_name,method_code=excluded.method_code,
-                   standard=excluded.standard,category=excluded.category,kind=excluded.kind,
-                   sort_order=excluded.sort_order,updated_at=excluded.updated_at""",
+                   ON CONFLICT(experiment_code) DO NOTHING""",
                 (cfg["key"], experiment_name, cfg["method"], cfg["std"], cfg["category"],
                  cfg["kind"], order, now(), now()),
             )
+        from equipment_registry import (
+            EQUIPMENT_CATALOG, EXPERIMENT_EQUIPMENT_BINDINGS
+        )
+        for item in EQUIPMENT_CATALOG:
+            c.execute(
+                """INSERT INTO equipment_registry(
+                   management_no,seq,equipment_name,model,measuring_range,manufacturer,
+                   serial_no,purchase_time,calibration_time,responsible,equipment_class,
+                   enabled,lifecycle_status,status_note,notes,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,1,'启用','','',?,?)
+                   ON CONFLICT(management_no) DO NOTHING""",
+                (
+                    item["management_no"], item["seq"], item["name"], item.get("model", ""),
+                    item.get("range", ""), item.get("manufacturer", ""),
+                    item.get("serial_no", ""), item.get("purchase_time", ""),
+                    item.get("calibration_time", ""), item.get("responsible", ""),
+                    item.get("class", ""), now(), now(),
+                ),
+            )
+        binding_count = c.execute("SELECT COUNT(*) FROM experiment_equipment_bindings").fetchone()[0]
+        if binding_count == 0:
+            for experiment_name, items in EXPERIMENT_EQUIPMENT_BINDINGS.items():
+                for order, item in enumerate(items, 1):
+                    c.execute(
+                        """INSERT INTO experiment_equipment_bindings(
+                           experiment,management_no,binding_role,required,sort_order,note,
+                           created_at,updated_at
+                           ) VALUES(?,?,?,?,?,?,?,?)
+                           ON CONFLICT(experiment,management_no) DO NOTHING""",
+                        (
+                            experiment_name, item["management_no"], item["role"],
+                            int(bool(item.get("required"))), order, item.get("note", ""),
+                            now(), now(),
+                        ),
+                    )
+
+        from equipment_registry import EXPERIMENT_DEFAULT_LOCATIONS
+        for experiment_name, cfg in EXPERIMENTS.items():
+            current = c.execute(
+                "SELECT id FROM experiment_config_versions WHERE experiment_code=? AND status='现行'",
+                (cfg["key"],),
+            ).fetchone()
+            if current:
+                continue
+            cur = c.execute(
+                """INSERT INTO experiment_config_versions(
+                   experiment_code,version,experiment_name,method_code,standard,category,kind,
+                   default_location,sop_version,record_template_version,software,status,
+                   effective_date,note,created_by,created_at,approved_by,approved_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'现行',?,'初始受控配置','system',?,'system',?)""",
+                (
+                    cfg["key"], "V1.0", experiment_name, cfg["method"], cfg["std"],
+                    cfg["category"], cfg.get("kind") or "generic",
+                    EXPERIMENT_DEFAULT_LOCATIONS.get(experiment_name, ""),
+                    "A/0", "A/0", "", str(china_today()), now(), now(),
+                ),
+            )
+            config_id = cur.lastrowid
+            for row in c.execute(
+                """SELECT management_no,binding_role,required,sort_order,note
+                   FROM experiment_equipment_bindings WHERE experiment=? ORDER BY sort_order""",
+                (experiment_name,),
+            ).fetchall():
+                c.execute(
+                    """INSERT OR IGNORE INTO experiment_config_equipment(
+                       config_id,management_no,binding_role,required,sort_order,note,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (config_id,row[0],row[1],row[2],row[3],row[4],now(),now()),
+                )
+
         test_experiments = [
             EXPERIMENTS["表面粗糙度试验"]["key"],
             EXPERIMENTS["弯曲性能试验"]["key"],
@@ -420,7 +519,7 @@ def save_experiment_method(data: dict[str, Any], actor: str) -> None:
                enabled=excluded.enabled,sort_order=excluded.sort_order,updated_at=excluded.updated_at""",
             (
                 internal_key, name, method, data.get("standard", ""),
-                data.get("category", ""), data.get("kind", ""),
+                data.get("category", ""), data.get("kind", "generic") or "generic",
                 int(bool(data.get("enabled", True))),
                 int(data.get("sort_order", 0) or 0), now(), now(),
             ),
@@ -467,33 +566,171 @@ def add_catalog(data: dict[str, Any], actor: str) -> None:
         )
     audit("sample_catalog", data["sample_name"], actor, "新增样品资料", new_value="、".join(codes))
 
+def list_equipment(include_disabled: bool = False) -> list[dict[str, Any]]:
+    q = "SELECT * FROM equipment_registry"
+    if not include_disabled:
+        q += " WHERE enabled=1"
+    return rows(q + " ORDER BY seq,management_no")
+
+
+def equipment_item(management_no: str) -> dict[str, Any] | None:
+    return one("SELECT * FROM equipment_registry WHERE management_no=?", (management_no,))
+
+
+def save_equipment(data: dict[str, Any], actor: str) -> None:
+    management_no = str(data.get("management_no", "")).strip()
+    equipment_name = str(data.get("equipment_name", "")).strip()
+    if not management_no or not equipment_name:
+        raise ValueError("管理编号和设备名称不能为空")
+    old = equipment_item(management_no)
+    with connect() as c:
+        c.execute(
+            """INSERT INTO equipment_registry(
+               management_no,seq,equipment_name,model,measuring_range,manufacturer,
+               serial_no,purchase_time,calibration_time,responsible,equipment_class,
+               enabled,lifecycle_status,status_note,notes,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(management_no) DO UPDATE SET
+               seq=excluded.seq,equipment_name=excluded.equipment_name,
+               model=excluded.model,measuring_range=excluded.measuring_range,
+               manufacturer=excluded.manufacturer,serial_no=excluded.serial_no,
+               purchase_time=excluded.purchase_time,calibration_time=excluded.calibration_time,
+               responsible=excluded.responsible,equipment_class=excluded.equipment_class,
+               enabled=excluded.enabled,lifecycle_status=excluded.lifecycle_status,
+               status_note=excluded.status_note,notes=excluded.notes,
+               updated_at=excluded.updated_at""",
+            (
+                management_no, int(data.get("seq", 0) or 0), equipment_name,
+                data.get("model", ""), data.get("measuring_range", ""),
+                data.get("manufacturer", ""), data.get("serial_no", ""),
+                data.get("purchase_time", ""), data.get("calibration_time", ""),
+                data.get("responsible", ""), data.get("equipment_class", ""),
+                int(bool(data.get("enabled", True))), data.get("lifecycle_status", "启用"),
+                data.get("status_note", ""), data.get("notes", ""),
+                old.get("created_at", now()) if old else now(), now(),
+            ),
+        )
+    audit(
+        "equipment", management_no, actor, "保存设备资料",
+        old_value=json.dumps(old or {}, ensure_ascii=False),
+        new_value=json.dumps(data, ensure_ascii=False),
+    )
+
+
+def list_experiment_equipment(experiment: str) -> list[dict[str, Any]]:
+    return rows(
+        """SELECT b.experiment,b.management_no,b.binding_role,b.required,
+           b.sort_order,b.note,e.seq,e.equipment_name,e.model,e.measuring_range,
+           e.manufacturer,e.serial_no,e.purchase_time,e.calibration_time,
+           e.responsible,e.equipment_class,e.enabled
+           FROM experiment_equipment_bindings b
+           JOIN equipment_registry e ON e.management_no=b.management_no
+           WHERE b.experiment=? AND e.enabled=1
+           ORDER BY b.sort_order,e.seq,e.management_no""",
+        (experiment,),
+    )
+
+
+def list_all_equipment_bindings() -> list[dict[str, Any]]:
+    return rows(
+        """SELECT b.experiment,b.management_no,b.binding_role,b.required,b.sort_order,
+           b.note,e.equipment_name,e.model,e.equipment_class
+           FROM experiment_equipment_bindings b
+           JOIN equipment_registry e ON e.management_no=b.management_no
+           ORDER BY b.experiment,b.sort_order,e.seq"""
+    )
+
+
+def bind_equipment(
+    experiment: str, management_no: str, binding_role: str,
+    required: bool, sort_order: int, note: str, actor: str,
+) -> None:
+    if not equipment_item(management_no):
+        raise ValueError("设备不存在")
+    if not experiment_method_by_name(experiment):
+        raise ValueError("实验项目不存在")
+    with connect() as c:
+        c.execute(
+            """INSERT INTO experiment_equipment_bindings(
+               experiment,management_no,binding_role,required,sort_order,note,
+               created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(experiment,management_no) DO UPDATE SET
+               binding_role=excluded.binding_role,required=excluded.required,
+               sort_order=excluded.sort_order,note=excluded.note,
+               updated_at=excluded.updated_at""",
+            (
+                experiment, management_no, binding_role, int(bool(required)),
+                int(sort_order or 0), note, now(), now(),
+            ),
+        )
+    audit(
+        "equipment_binding", f"{experiment}|{management_no}", actor,
+        "保存实验设备绑定", new_value=f"{binding_role}|必需={bool(required)}|{note}",
+    )
+
+
+def unbind_equipment(experiment: str, management_no: str, actor: str) -> None:
+    with connect() as c:
+        c.execute(
+            "DELETE FROM experiment_equipment_bindings WHERE experiment=? AND management_no=?",
+            (experiment, management_no),
+        )
+    audit(
+        "equipment_binding", f"{experiment}|{management_no}",
+        actor, "解除实验设备绑定",
+    )
+
+
 def device_preset(experiment: str) -> dict[str, Any]:
-    r = one("SELECT * FROM device_presets WHERE experiment=?", (experiment,)) or {}
-    if r:
-        r["extra"] = json.loads(r.get("extra_json") or "{}")
-    return r
+    """Compatibility summary generated from the published configuration version."""
+    method = experiment_method_by_name(experiment)
+    config = current_experiment_config(method["experiment_code"]) if method else None
+    items = config_equipment(config["id"], True) if config else []
+    preferred_roles = {"主设备", "成像设备", "测量设备", "位移测量", "温度测量"}
+    primary = [x for x in items if x["binding_role"] in preferred_roles]
+    if not primary:
+        primary = [x for x in items if x["required"]]
+    if not primary:
+        primary = items[:1]
+    def unique_join(values: list[str]) -> str:
+        return "；".join(dict.fromkeys(x for x in values if str(x).strip()))
+    return {
+        "experiment": experiment,
+        "equipment_name": unique_join([x["equipment_name"] for x in primary]),
+        "equipment_model": unique_join([x["model"] for x in primary]),
+        "equipment_no": unique_join([x["management_no"] for x in primary]),
+        "calibration_certificate": "",
+        "calibration_due": unique_join([x["calibration_time"] for x in primary]),
+        "software": config.get("software", "") if config else "",
+        "default_location": config.get("default_location", "") if config else "",
+        "extra": {
+            "config_version": config.get("version", "") if config else "",
+            "bound_equipment": items,
+            "equipment_count": len(items),
+            "required_count": sum(1 for x in items if x["required"]),
+        },
+    }
 
 
 def save_device_preset(experiment: str, data: dict[str, Any], actor: str) -> None:
+    """Retained only for storing optional software/version notes."""
     with connect() as c:
         c.execute(
-            """INSERT INTO device_presets(experiment,equipment_name,equipment_model,equipment_no,
-               calibration_certificate,calibration_due,software,default_location,extra_json,updated_by,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(experiment) DO UPDATE SET
-               equipment_name=excluded.equipment_name,equipment_model=excluded.equipment_model,
-               equipment_no=excluded.equipment_no,calibration_certificate=excluded.calibration_certificate,
-               calibration_due=excluded.calibration_due,software=excluded.software,
-               default_location=excluded.default_location,extra_json=excluded.extra_json,
-               updated_by=excluded.updated_by,updated_at=excluded.updated_at""",
+            """INSERT INTO device_presets(
+               experiment,equipment_name,equipment_model,equipment_no,
+               calibration_certificate,calibration_due,software,default_location,
+               extra_json,updated_by,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(experiment) DO UPDATE SET
+               software=excluded.software,updated_by=excluded.updated_by,
+               updated_at=excluded.updated_at""",
             (
-                experiment, data.get("equipment_name", ""), data.get("equipment_model", ""),
-                data.get("equipment_no", ""), data.get("calibration_certificate", ""),
-                str(data.get("calibration_due") or ""), data.get("software", ""),
-                data.get("default_location", ""), json.dumps(data.get("extra", {}), ensure_ascii=False),
-                actor, now(),
+                experiment, "", "", "", "", "", data.get("software", ""),
+                data.get("default_location", ""), "{}", actor, now(),
             ),
         )
-    audit("device_preset", experiment, actor, "更新设备预设")
+    audit("device_preset", experiment, actor, "更新实验软件预设")
 
 
 # ---------------------- Numbering and intake ----------------------
@@ -647,6 +884,242 @@ def void_group(group_id: int, actor: str, reason: str) -> None:
     audit("sample_group", str(group_id), actor, "删除错误入库", reason=reason)
 
 
+
+# ---------------------- Configurable experiment versions ----------------------
+def list_experiment_configs(experiment_code: str | None = None) -> list[dict[str, Any]]:
+    q = "SELECT * FROM experiment_config_versions"
+    args: list[Any] = []
+    if experiment_code:
+        q += " WHERE experiment_code=?"; args.append(experiment_code)
+    return rows(q + " ORDER BY experiment_name,id DESC", args)
+
+
+def experiment_config(config_id: int) -> dict[str, Any] | None:
+    return one("SELECT * FROM experiment_config_versions WHERE id=?", (config_id,))
+
+
+def current_experiment_config(experiment_code: str) -> dict[str, Any] | None:
+    return one(
+        "SELECT * FROM experiment_config_versions WHERE experiment_code=? AND status='现行' ORDER BY id DESC LIMIT 1",
+        (experiment_code,),
+    )
+
+
+def config_equipment(config_id: int, include_unavailable: bool = True) -> list[dict[str, Any]]:
+    q = """SELECT ce.config_id,ce.management_no,ce.binding_role,ce.required,ce.sort_order,ce.note,
+           e.seq,e.equipment_name,e.model,e.measuring_range,e.manufacturer,e.serial_no,
+           e.purchase_time,e.calibration_time,e.responsible,e.equipment_class,e.enabled,
+           e.lifecycle_status,e.status_note
+           FROM experiment_config_equipment ce
+           JOIN equipment_registry e ON e.management_no=ce.management_no
+           WHERE ce.config_id=?"""
+    if not include_unavailable:
+        q += " AND e.enabled=1 AND e.lifecycle_status='启用'"
+    return rows(q + " ORDER BY ce.sort_order,e.seq,e.management_no", (config_id,))
+
+
+def create_experiment_config_version(
+    experiment_code: str, version: str, actor: str, copy_current: bool = True,
+) -> int:
+    method = experiment_method(experiment_code)
+    if not method:
+        raise ValueError("实验项目不存在")
+    version = str(version or "").strip()
+    if not version:
+        raise ValueError("配置版本号不能为空")
+    current = current_experiment_config(experiment_code) if copy_current else None
+    source = current or {
+        "experiment_name": method["experiment_name"], "method_code": method["method_code"],
+        "standard": method.get("standard", ""), "category": method.get("category", ""),
+        "kind": method.get("kind") or "generic", "default_location": "",
+        "sop_version": "", "record_template_version": "", "software": "", "note": "",
+    }
+    with connect() as c:
+        cur = c.execute(
+            """INSERT INTO experiment_config_versions(
+               experiment_code,version,experiment_name,method_code,standard,category,kind,
+               default_location,sop_version,record_template_version,software,status,
+               effective_date,note,created_by,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'草稿','',?,?,?)""",
+            (
+                experiment_code,version,source["experiment_name"],source["method_code"],
+                source.get("standard", ""),source.get("category", ""),
+                source.get("kind") or "generic",source.get("default_location", ""),
+                source.get("sop_version", ""),source.get("record_template_version", ""),
+                source.get("software", ""),source.get("note", ""),actor,now(),
+            ),
+        )
+        config_id = int(cur.lastrowid)
+        if current:
+            for item in config_equipment(current["id"], True):
+                c.execute(
+                    """INSERT INTO experiment_config_equipment(
+                       config_id,management_no,binding_role,required,sort_order,note,created_at,updated_at
+                       ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (config_id,item["management_no"],item["binding_role"],item["required"],
+                     item["sort_order"],item.get("note", ""),now(),now()),
+                )
+    audit("experiment_config", str(config_id), actor, "创建配置草稿", new_value=version)
+    return config_id
+
+
+def save_experiment_config(config_id: int, data: dict[str, Any], actor: str) -> None:
+    current = experiment_config(config_id)
+    if not current:
+        raise ValueError("配置版本不存在")
+    if current["status"] != "草稿":
+        raise ValueError("只有草稿配置可以修改")
+    location = str(data.get("default_location", "")).strip()
+    from constants import DETECTION_LOCATIONS
+    if location and location not in DETECTION_LOCATIONS:
+        raise ValueError("检测地点不在受控地点库中")
+    with connect() as c:
+        c.execute(
+            """UPDATE experiment_config_versions SET
+               experiment_name=?,method_code=?,standard=?,category=?,kind=?,default_location=?,
+               sop_version=?,record_template_version=?,software=?,effective_date=?,note=?
+               WHERE id=?""",
+            (
+                str(data.get("experiment_name", "")).strip(),
+                str(data.get("method_code", "")).strip(),data.get("standard", ""),
+                data.get("category", ""),data.get("kind", "generic") or "generic",
+                location,data.get("sop_version", ""),data.get("record_template_version", ""),
+                data.get("software", ""),data.get("effective_date", ""),
+                data.get("note", ""),config_id,
+            ),
+        )
+    audit("experiment_config", str(config_id), actor, "保存配置草稿", new_value=json.dumps(data,ensure_ascii=False))
+
+
+def bind_config_equipment(
+    config_id: int, management_no: str, binding_role: str, required: bool,
+    sort_order: int, note: str, actor: str,
+) -> None:
+    config = experiment_config(config_id)
+    if not config or config["status"] != "草稿":
+        raise ValueError("只能修改草稿配置的设备关系")
+    device = equipment_item(management_no)
+    if not device:
+        raise ValueError("设备不存在")
+    with connect() as c:
+        c.execute(
+            """INSERT INTO experiment_config_equipment(
+               config_id,management_no,binding_role,required,sort_order,note,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(config_id,management_no) DO UPDATE SET
+               binding_role=excluded.binding_role,required=excluded.required,
+               sort_order=excluded.sort_order,note=excluded.note,updated_at=excluded.updated_at""",
+            (config_id,management_no,binding_role,int(bool(required)),int(sort_order or 0),note,now(),now()),
+        )
+    audit("experiment_config_equipment", f"{config_id}|{management_no}", actor, "保存配置设备关系")
+
+
+def unbind_config_equipment(config_id: int, management_no: str, actor: str) -> None:
+    config = experiment_config(config_id)
+    if not config or config["status"] != "草稿":
+        raise ValueError("只能修改草稿配置的设备关系")
+    with connect() as c:
+        c.execute("DELETE FROM experiment_config_equipment WHERE config_id=? AND management_no=?", (config_id,management_no))
+    audit("experiment_config_equipment", f"{config_id}|{management_no}", actor, "解除配置设备关系")
+
+
+def publish_experiment_config(config_id: int, actor: str, reason: str = "") -> None:
+    config = experiment_config(config_id)
+    if not config or config["status"] != "草稿":
+        raise ValueError("只能发布草稿配置")
+    if not str(config.get("experiment_name", "")).strip() or not str(config.get("method_code", "")).strip():
+        raise ValueError("实验名称和检测方法不能为空")
+    equipment = config_equipment(config_id, True)
+    required = [x for x in equipment if x["required"]]
+    unavailable = [x for x in required if not x["enabled"] or x.get("lifecycle_status") != "启用"]
+    if unavailable:
+        raise ValueError("存在已停用、维修或报废的必需设备，不能发布")
+    with connect() as c:
+        c.execute(
+            "UPDATE experiment_config_versions SET status='历史' WHERE experiment_code=? AND status='现行'",
+            (config["experiment_code"],),
+        )
+        c.execute(
+            """UPDATE experiment_config_versions SET status='现行',approved_by=?,approved_at=?,
+               effective_date=CASE WHEN COALESCE(effective_date,'')='' THEN ? ELSE effective_date END
+               WHERE id=?""",
+            (actor,now(),str(china_today()),config_id),
+        )
+        c.execute(
+            """UPDATE experiment_methods SET experiment_name=?,method_code=?,standard=?,category=?,kind=?,
+               enabled=1,updated_at=? WHERE experiment_code=?""",
+            (config["experiment_name"],config["method_code"],config.get("standard", ""),
+             config.get("category", ""),config.get("kind") or "generic",now(),config["experiment_code"]),
+        )
+    audit("experiment_config", str(config_id), actor, "批准并发布配置", new_value=config["version"], reason=reason)
+
+
+def _equipment_snapshot_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "management_no": item["management_no"], "equipment_name": item["equipment_name"],
+        "model": item.get("model", ""), "measuring_range": item.get("measuring_range", ""),
+        "manufacturer": item.get("manufacturer", ""), "serial_no": item.get("serial_no", ""),
+        "calibration_time": item.get("calibration_time", ""), "responsible": item.get("responsible", ""),
+        "equipment_class": item.get("equipment_class", ""), "lifecycle_status": item.get("lifecycle_status", ""),
+        "binding_role": item.get("binding_role", ""), "required": int(bool(item.get("required"))),
+        "sort_order": item.get("sort_order", 0), "note": item.get("note", ""),
+    }
+
+
+def build_experiment_config_snapshot(experiment_code: str) -> dict[str, Any]:
+    config = current_experiment_config(experiment_code)
+    if not config:
+        raise ValueError("该实验尚未发布现行配置版本")
+    equipment = config_equipment(config["id"], True)
+    required_unavailable = [
+        x for x in equipment if x["required"] and (not x["enabled"] or x.get("lifecycle_status") != "启用")
+    ]
+    if required_unavailable:
+        raise ValueError("该实验现行配置存在不可用的必需设备，请先建立并发布新配置")
+    sop = template_for_version(config["experiment_name"], "SOP", config.get("sop_version") or "") if config.get("sop_version") else active_version(config["experiment_name"], "SOP")
+    record_tpl = template_for_version(config["experiment_name"], "原始记录表", config.get("record_template_version") or "") if config.get("record_template_version") else active_version(config["experiment_name"], "原始记录表")
+    snapshot = {
+        "config_id": config["id"], "config_version": config["version"],
+        "experiment_code": config["experiment_code"], "experiment_name": config["experiment_name"],
+        "method_code": config["method_code"], "standard": config.get("standard", ""),
+        "category": config.get("category", ""), "kind": config.get("kind") or "generic",
+        "default_location": config.get("default_location", ""), "software": config.get("software", ""),
+        "sop_version": (sop or {}).get("version", config.get("sop_version", "")),
+        "sop_file": (sop or {}).get("file_name", ""),
+        "record_template_version": (record_tpl or {}).get("version", config.get("record_template_version", "")),
+        "record_template_file": (record_tpl or {}).get("file_name", ""),
+        "equipment": [_equipment_snapshot_row(x) for x in equipment],
+        "published_at": config.get("approved_at", ""), "snapshot_created_at": now(),
+    }
+    raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+    snapshot["snapshot_hash"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return snapshot
+
+
+def task_config_snapshot(task_no: str) -> dict[str, Any]:
+    item = one("SELECT * FROM task_config_snapshots WHERE task_no=?", (task_no,))
+    if not item:
+        task_item = task(task_no)
+        return build_experiment_config_snapshot(task_item["experiment_code"]) if task_item else {}
+    snapshot = json.loads(item.get("snapshot_json") or "{}")
+    snapshot["snapshot_hash"] = item.get("snapshot_hash", snapshot.get("snapshot_hash", ""))
+    return snapshot
+
+
+def current_config_overview() -> list[dict[str, Any]]:
+    result = []
+    for method in list_experiment_methods(True):
+        config = current_experiment_config(method["experiment_code"])
+        result.append({
+            "experiment_name": method["experiment_name"], "method_code": method["method_code"],
+            "enabled": method["enabled"], "config_version": config.get("version", "未发布") if config else "未发布",
+            "kind": config.get("kind", method.get("kind", "generic")) if config else method.get("kind", "generic"),
+            "default_location": config.get("default_location", "") if config else "",
+            "equipment_count": len(config_equipment(config["id"], True)) if config else 0,
+            "status": config.get("status", "未发布") if config else "未发布",
+        })
+    return result
+
 # ---------------------- Task packages ----------------------
 def available_groups_for_assignment() -> list[dict[str, Any]]:
     return rows(
@@ -679,7 +1152,8 @@ def create_task_package(group_id: int, experiment_codes: list[str], assignee: st
     package_no = _next_package_no(g["group_no"])
     sample_nos = [x["sample_no"] for x in group_samples(group_id)]
     selected = [available[key] for key in experiment_codes]
-    experiment_names = [x["experiment"] for x in selected]
+    config_snapshots = {x["experiment_code"]: build_experiment_config_snapshot(x["experiment_code"]) for x in selected}
+    experiment_names = [config_snapshots[x["experiment_code"]]["experiment_name"] for x in selected]
     ts = now()
     with connect() as c:
         c.execute(
@@ -699,6 +1173,7 @@ def create_task_package(group_id: int, experiment_codes: list[str], assignee: st
         )
         for index, req in enumerate(selected, 1):
             task_no = f"{package_no}-T{index:02d}"
+            snap = config_snapshots[req["experiment_code"]]
             c.execute(
                 """INSERT INTO tasks(
                    task_no,package_no,commission_no,group_id,group_no,sample_nos,
@@ -708,9 +1183,16 @@ def create_task_package(group_id: int, experiment_codes: list[str], assignee: st
                 (
                     task_no, package_no, g["commission_no"], group_id, g["group_no"],
                     json.dumps(sample_nos, ensure_ascii=False),
-                    req["experiment_code"], req["experiment"], req["method_code"],
-                    req["standard"], g["material_name"], assignee, reviewer, ts, ts,
+                    req["experiment_code"], snap["experiment_name"], snap["method_code"],
+                    snap["standard"], g["material_name"], assignee, reviewer, ts, ts,
                 ),
+            )
+            c.execute(
+                """INSERT INTO task_config_snapshots(
+                   task_no,config_id,config_version,snapshot_json,snapshot_hash,created_at
+                   ) VALUES(?,?,?,?,?,?)""",
+                (task_no,snap["config_id"],snap["config_version"],
+                 json.dumps(snap,ensure_ascii=False,default=str),snap["snapshot_hash"],ts),
             )
             c.execute(
                 "UPDATE requested_tests SET status='已分配',task_no=? WHERE id=?",

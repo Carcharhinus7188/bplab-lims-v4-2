@@ -84,12 +84,42 @@ def commission_document(c,groups,tests,receiver_name):
 
 
 def sample_register_document(c,groups,samples,tests,receiver_name):
-    d=Document(TEMPLATE_DIR/"FORM_SAMPLE_REGISTER.docx");gm={g["group_no"]:g for g in groups};tm={}
-    for t in tests:tm.setdefault(t["group_no"],[]).append(t["experiment"])
+    """Generate DLBP-CX-P10-R01 sample registration form.
+
+    Column order follows the controlled template exactly:
+    laboratory sample number, commissioning unit, sample name, model/specification,
+    production unit, sample number/batch, inspection items, quantity, receiver,
+    date and remarks.
+    """
+    d=Document(TEMPLATE_DIR/"FORM_SAMPLE_REGISTER.docx")
+    gm={g["group_no"]:g for g in groups}
+    tm={}
+    for t in tests:
+        tm.setdefault(t["group_no"],[]).append(t["experiment"])
+
+    production_unit=c.get("production_org_name","")
+    if c.get("production_relation")=="受委托生产企业" and production_unit:
+        production_unit += "（受委托生产企业）"
+
     data=[]
     for s in samples:
-        g=gm[s["group_no"]];data.append([s["sample_no"],c.get("client_name",""),s["sample_name"],s["model"],g.get("product_no",""),"、".join(tm.get(s["group_no"],[])),1,receiver_name,c.get("commission_date",""),s.get("condition_note","")])
-    _fill(d.tables[0],data);return _save(d)
+        g=gm[s["group_no"]]
+        remarks=s.get("condition_note","") or g.get("notes","") or ""
+        data.append([
+            s["sample_no"],
+            c.get("client_name",""),
+            s["sample_name"],
+            s["model"],
+            production_unit,
+            g.get("product_no",""),
+            "、".join(tm.get(s["group_no"],[])),
+            1,
+            receiver_name,
+            c.get("commission_date",""),
+            remarks,
+        ])
+    _fill(d.tables[0],data)
+    return _save(d)
 
 
 def loan_return_document(loans,user_names):

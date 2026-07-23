@@ -15,11 +15,11 @@ COMMON_ENV_FIELDS = [
 ]
 
 COMMON_DEVICE_FIELDS = [
-    {"key": "equipment_name", "label": "主要设备名称", "type": "text"},
-    {"key": "equipment_model", "label": "设备型号/规格", "type": "text"},
-    {"key": "equipment_no", "label": "设备管理编号", "type": "text"},
-    {"key": "calibration_certificate", "label": "校准/检定证书编号", "type": "text"},
-    {"key": "calibration_due", "label": "校准/检定有效期至", "type": "date"},
+    {"key": "equipment_name", "label": "主要设备名称", "type": "text", "readonly": True},
+    {"key": "equipment_model", "label": "设备型号/规格", "type": "text", "readonly": True},
+    {"key": "equipment_no", "label": "设备管理编号", "type": "text", "readonly": True},
+    {"key": "calibration_certificate", "label": "校准/检定证书编号", "type": "text", "readonly": True},
+    {"key": "calibration_due", "label": "台账校准时间", "type": "text", "readonly": True},
     {"key": "equipment_status", "label": "使用前设备状态", "type": "select", "options": ["正常", "异常"]},
 ]
 
@@ -279,4 +279,26 @@ SCHEMAS = {
             ("overall", "总体观察结果", "calc"), ("conclusion", "单样结论", "calc"), ("note", "备注", "text"),
         ],
     },
+    "generic": {
+        "title": "通用实验记录",
+        "sections": [
+            {"title": "环境、地点和文件", "fields": COMMON_ENV_FIELDS + COMMON_DEVICE_FIELDS + [
+                {"key": "sample_preparation", "label": "样品制备与状态确认", "type": "textarea"},
+                {"key": "test_conditions", "label": "试验条件与参数", "type": "textarea"},
+                {"key": "procedure_summary", "label": "操作过程摘要", "type": "textarea"},
+                {"key": "acceptance_criteria", "label": "接受准则/判定要求", "type": "textarea"},
+            ]},
+        ],
+        "columns": [
+            ("sample_no", "样品编号", "text"),
+            ("measurement_item", "测量项目/位置", "text"),
+            ("raw_value", "原始测量值", "text"),
+            ("unit", "单位", "text"),
+            ("calculated_value", "计算结果", "text"),
+            ("conclusion", "单样结论", "select:符合|不符合|需复核"),
+            ("file_no", "数据/图像文件编号", "text"),
+            ("note", "备注", "text"),
+        ],
+    },
+
 }
