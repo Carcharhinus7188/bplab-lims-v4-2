@@ -1,11 +1,12 @@
-﻿package_file,source_file,sha256,editable_fields,paragraphs,tables,sections,table_rows,table_cols
-RECORD_R001_ROUGHNESS.docx,R001-口腔增材制造金属试样表面粗糙度检测原始记录表.docx,4fc9a36a6f9f2ea42d8e77e76eeea58c8b23b540daf6b696d533ba30eb64af15,288,22,13,1,"[2, 7, 6, 7, 8, 11, 7, 7, 7, 6, 8, 8, 4]","[6, 6, 6, 9, 5, 5, 4, 12, 2, 7, 4, 4, 4]"
-RECORD_R004_MC_CRACK.docx,R004-金属-陶瓷结合裂纹萌生试验原始记录表.docx,9a742094aae6ccee7d5afb3af4b968061f7e178da78e74fad1bc3428b2c65066,166,14,8,2,"[9, 3, 3, 11, 5, 7, 7, 10]","[4, 6, 9, 4, 2, 2, 14, 3]"
-RECORD_R005_XRAY.docx,R005-金属内部质量_X射线数字成像灰度分析检测原始记录表.docx,feda2c38188c89408e70d45180be9a6970783378fd68877a57bd40c63b760cf8,363,17,11,1,"[1, 8, 6, 9, 4, 7, 11, 18, 7, 14, 5]","[6, 4, 6, 9, 9, 6, 8, 13, 7, 3, 4]"
-RECORD_R006_WARPAGE.docx,R006-翘曲变形试验原始记录表.docx,7b60c443f93ccb9aee703f8e454c7cc676f4206a3b041fe59d93d4155acb75e9,347,36,14,1,"[9, 2, 5, 6, 11, 9, 11, 6, 11, 11, 5, 4, 5, 3]","[4, 9, 4, 4, 6, 4, 6, 4, 6, 7, 2, 6, 3, 4]"
-RECORD_R007_CTE.docx,R007-热膨胀系数测试原始记录表.docx,b1760ac6cb2a3a83f7f668cbea03b7800e1334e6a14aab1fff2cb86a422aaea1,272,21,9,1,"[9, 7, 3, 13, 7, 7, 7, 7, 6]","[4, 5, 9, 4, 9, 9, 9, 6, 4]"
-RECORD_R009_THERMAL_SHOCK.docx,R009-陶瓷牙耐急冷急热性能试验原始记录表.docx,7a895f83e3e0a79427ce823da004e9fe286195e6ecf8bca71fdde6ffc7723e34,362,17,12,1,"[9, 4, 6, 3, 9, 6, 2, 6, 29, 6, 5, 6]","[4, 5, 9, 6, 4, 7, 6, 4, 7, 4, 6, 4]"
-RECORD_R010_BENDING.docx,R010激光选区熔化金属材料弯曲性能试验原始记录表.docx,156493cb6c4dab5dd8e386233c1fc1a17f5e51d3e1eddf22cf9d44ac79ff532a,174,14,8,1,"[8, 5, 6, 8, 8, 10, 3, 4]","[6, 9, 5, 6, 11, 4, 7, 4]"
-RECORD_R011_VICKERS.docx,R011维氏硬度试验原始记录表.docx,abb6ed3a94dfe5340cf2559b24e623167733494482c6f5b068da861f15dc5cd8,225,14,9,1,"[8, 3, 6, 3, 6, 13, 7, 5, 11]","[6, 9, 6, 8, 2, 9, 7, 7, 6]"
-RECORD_R012_COLOR_STABILITY.docx,R012牙科材料色稳定性测定原始记录表.docx,df01bc108c77de9a11d8aeb61a07caf5b4bc13340fe3364d8d0288bd787c7131,562,23,15,1,"[8, 8, 4, 6, 4, 8, 13, 4, 7, 5, 19, 15, 5, 9, 2]","[6, 8, 9, 7, 4, 6, 10, 4, 10, 4, 8, 10, 9, 5, 8]"
-RECORD_R013_THICKNESS.docx,R013增材制造金属试样厚度测量试验原始记录表.docx,ad70afebf2e74ea4f2d3b37b0b01daaa91be457ad4173e726931daa54eb2c274,475,12,8,1,"[9, 3, 9, 8, 18, 8, 6, 10]","[6, 9, 5, 5, 18, 10, 7, 6]"
+experiment,package_file,status,sha256,source_identity
+表面粗糙度,templates/records/R001_roughness.pages,blocked_pages,c4679972d287c6c32710a340562f3c04e0686c3dde23ccbd779f5be17cb6b89f,与用户ZIP内Pages母版逐字节一致
+金属—陶瓷结合裂纹萌生,,missing,,资料包未含对应受控原始记录DOCX
+金属内部质量X射线数字成像灰度分析,templates/records/R005_xray.docx,controlled,82c7b040d5478fc3523516658cac0f670d5b97c819d33f11bfdb2aa6b7d72a73,与用户ZIP内DOCX母版逐字节一致
+翘曲变形,templates/records/R006_warpage.docx,controlled,0239b1d584bffd5f4aaa2368672cb023bdfdfc54ca6f7795a6a1a250c95f66b3,与用户ZIP内DOCX母版逐字节一致
+热膨胀系数,templates/records/R007_thermal_expansion.docx,controlled,eb15c3eeec452914246b33c53133ee51e77db623603700941bac0b22581b5ac2,与用户ZIP内DOCX母版逐字节一致
+陶瓷牙耐急冷急热,templates/records/R009_thermal_shock.docx,controlled,c5daaa203b3943c869c5aa340274934714efc6605de21425ea356f819e1eeedf,与用户ZIP内DOCX母版逐字节一致
+弯曲性能,templates/records/R010_bending.docx,controlled,580d94e6fd216870ef02fb9580f7cb5d302e38461a8c2c640cbd6d3660639d3c,与用户ZIP内DOCX母版逐字节一致
+维氏硬度,templates/records/R011_vickers.docx,controlled,0a566b39f3288a4f86486c3ab3545e934a200e6b10ec34af7be3f3b79c474310,与用户ZIP内DOCX母版逐字节一致
+增材制造金属试样厚度测量,,missing,,资料包仅含SOP
+牙科材料色稳定性,templates/records/R012_color_stability.docx,controlled,2ea7ce977d4b5dc5d089e581512802e9ac30130a4835f1c606ee186e93833f58,与用户ZIP内DOCX母版逐字节一致
+检验报告,templates/report/检验报告_非受控测试母版.docx,test_only,ec19508dc502f55b659eb9cbba6df59ff739dd918a5e900c43ce22757fd4c75e,程序测试母版；不是用户受控报告
