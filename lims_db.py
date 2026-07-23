@@ -7,7 +7,7 @@ from typing import Any, Iterable
 import base64, calendar, hashlib, json, os, re, secrets, sqlite3
 
 ROOT = Path(__file__).parent
-DB_PATH = ROOT / "data" / "bplab_trace_v55.db"
+DB_PATH = ROOT / "data" / "bplab_trace_v56.db"
 ATTACHMENT_DIR = ROOT / "data" / "attachments"
 SIGNATURE_DIR = ROOT / "data" / "signatures"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")

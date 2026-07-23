@@ -293,7 +293,8 @@ def _equipment_raw_value(field: dict[str, Any], item: dict[str, Any], operator: 
     if "有效期至" in header or "校准核查有效期" in header or "标准块有效期" in header:
         return str(item.get("calibration_due", "") or item.get("校准有效期至", ""))
     if "使用前状态" in header or "状态确认" in header:
-        return "☑正常 □异常"
+        status = str(item.get("usage_status", "正常") or "正常")
+        return "☑正常 □异常" if status == "正常" else "□正常 ☑异常"
     if "确认人" in header or "核查人" in header:
         return operator
     if "设备器具名称" in header or header == "名称":
