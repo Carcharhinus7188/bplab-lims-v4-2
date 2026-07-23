@@ -146,9 +146,19 @@ def report_document(c,groups,samples,tasks,records,report,user_names,signatures)
     for i,t in enumerate(tasks,1):
         rec=records.get(t["task_no"])
         if not rec:continue
-        payload=rec["payload"];common=payload.get("common",{});params=payload.get("parameters",{});summary,conclusion=result_summary(t["kind"],payload.get("data",[]))
-        eq.append([params.get("equipment_name",common.get("equipment_name","")),params.get("equipment_model",common.get("equipment_model","")),"",params.get("calibration_certificate",common.get("calibration_certificate","")),"",params.get("calibration_due",common.get("calibration_due",""))])
-        env.append([params.get("detection_location",common.get("location","")),params.get("temperature",common.get("temperature","")),params.get("humidity",common.get("humidity","")),payload.get("deviation","")])
+        payload=rec["payload"];common=payload.get("common",{});params=payload.get("parameters",{})
+        summary=payload.get("report_summary","")
+        conclusion=payload.get("report_conclusion","")
+        if not summary or not conclusion:
+            legacy_summary,legacy_conclusion=result_summary(t["kind"],payload.get("data",[]))
+            summary=summary or legacy_summary;conclusion=conclusion or legacy_conclusion
+        equipment_rows=payload.get("equipment_snapshot",[])
+        used=[x for x in equipment_rows if x.get("本次使用")=="是"]
+        eq_names="；".join(f"{x.get('设备名称','')}（{x.get('管理编号','')}）" for x in used)
+        eq_models="；".join(x.get("型号规格","") for x in used if x.get("型号规格"))
+        eq.append([eq_names,eq_models,"","","",""])
+        location=(payload.get("configuration_snapshot",{}) or {}).get("default_location","") or params.get("detection_location",common.get("location",""))
+        env.append([location,params.get("temperature",common.get("temperature","")),params.get("humidity",common.get("humidity","")),payload.get("deviation","")])
         item=f"{t['group_no']} {t.get('sample_name','')}：{t['experiment']}";results.append([i,item,t.get("standard",""),summary,conclusion,payload.get("deviation","")])
     if len(d.tables)>0:_fill(d.tables[0],eq)
     if len(d.tables)>1:_fill(d.tables[1],env)

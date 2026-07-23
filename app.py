@@ -10,13 +10,14 @@ from constants import *
 from lims_db import *
 from experiment_engine import schema, initial_parameters, initial_rows, calculate_rows, dataframe, columns_for_editor
 from record_word_engine import export_record
+from template_record_engine import template_manifest, prefill_template_fields, validate_template_fields, completion_summary
 from equipment_registry import EQUIPMENT_BINDING_ROLES
 from experiment_schemas import SCHEMAS
 from form_engine import commission_document, sample_register_document, loan_return_document, report_document
+from trace_excel_engine import build_internal_trace_workbook
 
 ROOT=Path(__file__).parent
 TEMPLATE_DIR=ROOT/"templates"
-TRACE_XLSX=TEMPLATE_DIR/"INTERNAL_TRACE_WORKBOOK.xlsx"
 SIG_DIR=ROOT/"data"/"signatures";SIG_DIR.mkdir(parents=True,exist_ok=True)
 
 st.set_page_config(page_title="BPLab Trace",page_icon="🧪",layout="wide",initial_sidebar_state="expanded")
@@ -324,23 +325,37 @@ elif page=="我的任务包":
                 except Exception as e:st.error(str(e))
 
 elif page=="实验记录":
-    header("每个实验独立原始记录，材料和设备信息自动带入")
-    all_packages=list_packages(None if role=="管理员" else "实验人员",None if role=="管理员" else username,["检测中","待归还","待回库确认","已回库"])
+    header("按受控原始记录模板逐项填写")
+    all_packages=list_packages(role,username,["检测中","待复核","退回修改","待归还","待回库确认","已回库"])
     task_list=[]
-    for p in all_packages:task_list.extend([t for t in package_tasks(p["package_no"]) if t["status"] in ["检测中","退回修改","待复核","更正待复核","已完成"]])
-    if not task_list:st.info("暂无可填写实验任务")
+    for p in all_packages:
+        task_list.extend([t for t in package_tasks(p["package_no"]) if t["status"] in ["检测中","退回修改","待复核","更正待复核","已完成"]])
+    if not task_list:
+        st.info("暂无可填写实验任务")
     else:
-        tn=st.selectbox("任务/原始记录/复核统一编号",[t["task_no"] for t in task_list],format_func=lambda x:next(f"{t['task_no']}｜{t['experiment']}" for t in task_list if t['task_no']==x));t=task(tn);config_snapshot=task_config_snapshot(tn);kind=config_snapshot.get("kind") or "generic";latest=latest_record(tn)
-        if latest and latest["status"]=="已锁定":st.warning("该记录已锁定。如需更正，请在修改追踪中创建新版本。");st.stop()
-        version=latest["version"] if latest else 1;prior=latest["payload"] if latest else {};compare=None
+        tn=st.selectbox(
+            "任务/原始记录/复核统一编号",
+            [t["task_no"] for t in task_list],
+            format_func=lambda x:next(f"{t['task_no']}｜{t['experiment']}" for t in task_list if t['task_no']==x),
+        )
+        t=task(tn);config_snapshot=task_config_snapshot(tn);latest=latest_record(tn)
+        if latest and latest["status"]=="已锁定":
+            st.warning("该记录已锁定。如需更正，请在修改追踪中创建新版本。")
+            st.stop()
+        version=latest["version"] if latest else 1
+        prior=latest["payload"] if latest else {}
+        compare=None
         if version>1:
             versions=record_versions(tn);compare=versions[-2]["payload"] if len(versions)>1 else None
-        snapshot_equipment=config_snapshot.get("equipment",[])
-        primary=[x for x in snapshot_equipment if x.get("required")] or snapshot_equipment[:1]
-        unique=lambda values:"；".join(dict.fromkeys(str(x) for x in values if str(x).strip()))
-        preset_values={"equipment_name":unique([x.get("equipment_name","") for x in primary]),"equipment_model":unique([x.get("model","") for x in primary]),"equipment_no":unique([x.get("management_no","") for x in primary]),"calibration_certificate":"","calibration_due":unique([x.get("calibration_time","") for x in primary]),"software":config_snapshot.get("software",""),"detection_location":package(t["package_no"])["detection_location"]}
-        parameters=prior.get("parameters") or initial_parameters(kind,preset_values,package(t["package_no"])["detection_location"]);sample_ids=t["sample_nos_list"];rows0=prior.get("data") or initial_rows(kind,sample_ids)
-        bound_devices=snapshot_equipment
+
+        group0=group(t["group_id"]);commission0=commission(t["commission_no"]);package0=package(t["package_no"])
+        sample_ids=t["sample_nos_list"]
+        template_name=config_snapshot.get("record_template_file","") or EXPERIMENTS.get(t["experiment"],{}).get("template","")
+        if not template_name or not (TEMPLATE_DIR/template_name).exists():
+            st.error("该实验尚未配置有效的受控原始记录模板，不能填写或提交正式记录。")
+            st.stop()
+
+        bound_devices=config_snapshot.get("equipment",[])
         equipment_snapshot=prior.get("equipment_snapshot") or [
             {
                 "管理编号":x["management_no"],
@@ -351,76 +366,181 @@ elif page=="实验记录":
                 "必需设备":"是" if x.get("required") else "否",
                 "台账校准时间":x.get("calibration_time","") or "未填写",
                 "任务快照状态":x.get("lifecycle_status","") or "未填写",
-                "本次使用":"是" if x["required"] else "否",
+                "本次使用":"是" if x.get("required") else "否",
                 "使用前状态":"正常",
                 "异常说明":"",
             }
             for x in bound_devices
         ]
-        st.info(f"材料名称：{t['material_name']}（任务下发时快照，实验员不可修改）｜方法：{t['method_code']}｜依据：{t['standard']}｜配置版本：{config_snapshot.get('config_version','')}｜设备快照：{len(bound_devices)}台/件")
-        tabs=st.tabs(["①自动信息","②全部过程参数","③原始数据与计算","④异常偏离","⑤附件追溯","⑥保存提交"])
+        production_unit=commission0.get("production_org_name","")
+        if commission0.get("production_relation")=="受委托生产企业" and production_unit:
+            production_unit += "（受委托生产企业）"
+        context={
+            "client_name":commission0.get("client_name",""),
+            "client_address":commission0.get("client_address",""),
+            "production_unit":production_unit,
+            "product_no":group0.get("product_no",""),
+            "sample_name":group0.get("sample_name",""),
+            "model":group0.get("model",""),
+            "material":t.get("material_name",""),
+            "sample_nos":sample_ids,
+            "sample_quantity":len(sample_ids),
+            "received_date":commission0.get("commission_date",""),
+            "report_no":t.get("commission_no",""),
+            "task_no":tn,
+            "test_date":str(china_today()),
+            "detection_location":package0.get("detection_location",""),
+            "standard":t.get("standard",""),
+            "operator":user["display_name"],
+            "reviewer":display_user(t.get("reviewer","")),
+        }
+        prior_fields=prior.get("template_fields") or {}
+        template_values=prefill_template_fields(template_name,context,bound_devices,prior_fields)
+        manifest=template_manifest(template_name)
+
+        st.info(
+            f"受控模板：{template_name}｜模板字段：{len(manifest)}项｜材料名称：{t['material_name']}（任务快照）｜"
+            f"配置版本：{config_snapshot.get('config_version','')}。原始记录下载时只在该模板现有单元格内填写，不增加任何附表或附件索引。"
+        )
+        tabs=st.tabs(["①自动信息与模板","②受控模板逐项填写","③设备使用确认","④异常与报告摘要","⑤附件追溯","⑥保存提交"])
         with tabs[0]:
-            st.text_input("任务编号",tn,disabled=True);st.text_input("样品组",t["group_no"],disabled=True);st.text_area("实体样品编号","、".join(sample_ids),disabled=True);st.text_input("材料名称",t["material_name"],disabled=True);st.text_input("检测方法",t["method_code"],disabled=True);st.text_input("检测依据",t["standard"],disabled=True)
-        new_params={}
+            a,b,c=st.columns(3)
+            a.text_input("任务编号",tn,disabled=True)
+            b.text_input("实验名称",t["experiment"],disabled=True)
+            c.text_input("检测地点",package0.get("detection_location",""),disabled=True)
+            a.text_input("样品名称",group0.get("sample_name",""),disabled=True)
+            b.text_input("材料名称",t["material_name"],disabled=True)
+            c.text_input("检测方法",t["method_code"],disabled=True)
+            st.text_area("实体样品编号","、".join(sample_ids),disabled=True)
+            st.download_button(
+                "下载当前受控空白原始记录模板",
+                (TEMPLATE_DIR/template_name).read_bytes(),
+                template_name,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            st.caption("模板文件保持原版式、原表格、原页眉页脚和原说明内容；程序不新增、删除、合并或拆分任何表格，只填写模板已有可填写位置。")
+
+        new_template_fields={}
         with tabs[1]:
-            st.subheader("自动绑定设备与使用前确认")
+            st.warning("提交复核前，模板中的每个可填写项都必须有明确记录。条件不适用时填写“不适用”，不得留空。含复选框的字段应将所选项改为☑。")
+            sections=[]
+            for field in manifest:
+                if field["section"] not in sections:sections.append(field["section"])
+            for section_index,section_name in enumerate(sections):
+                section_fields=[x for x in manifest if x["section"]==section_name]
+                with st.expander(f"{section_name}（{len(section_fields)}项）",expanded=section_index==0):
+                    frame=pd.DataFrame([
+                        {
+                            "位置":field["position"],
+                            "字段":field["label"],
+                            "模板原内容":field["template_text"],
+                            "填写值":template_values.get(field["key"],""),
+                        }
+                        for field in section_fields
+                    ])
+                    edited=st.data_editor(
+                        frame,
+                        hide_index=True,
+                        use_container_width=True,
+                        num_rows="fixed",
+                        height=min(600,max(180,42*(len(frame)+1))),
+                        key=f"template_{tn}_{version}_{section_index}",
+                        column_config={
+                            "位置":st.column_config.TextColumn(disabled=True,width="small"),
+                            "字段":st.column_config.TextColumn(disabled=True,width="medium"),
+                            "模板原内容":st.column_config.TextColumn(disabled=True,width="large"),
+                            "填写值":st.column_config.TextColumn(width="large",help="完整填写；不适用项目请明确填写“不适用”"),
+                        },
+                    )
+                    for field,row in zip(section_fields,edited.to_dict("records")):
+                        new_template_fields[field["key"]]=str(row.get("填写值","") or "")
+            summary0=completion_summary(template_name,new_template_fields)
+            a,b,c=st.columns(3)
+            a.metric("模板字段总数",summary0["total"]);b.metric("已完成",summary0["completed"]);c.metric("待填写",summary0["missing"])
+
+        with tabs[2]:
+            st.subheader("任务下发时设备配置快照及本次使用确认")
             equipment_df=st.data_editor(
-                pd.DataFrame(equipment_snapshot),
-                hide_index=True,
-                use_container_width=True,
-                num_rows="fixed",
+                pd.DataFrame(equipment_snapshot),hide_index=True,use_container_width=True,num_rows="fixed",
                 key=f"equipment_{tn}_{version}",
                 column_config={
-                    "管理编号":st.column_config.TextColumn(disabled=True),
-                    "设备名称":st.column_config.TextColumn(disabled=True),
-                    "型号规格":st.column_config.TextColumn(disabled=True),
-                    "测量范围":st.column_config.TextColumn(disabled=True),
-                    "设备角色":st.column_config.TextColumn(disabled=True),
-                    "必需设备":st.column_config.TextColumn(disabled=True),
-                    "台账校准时间":st.column_config.TextColumn(disabled=True),
-                    "任务快照状态":st.column_config.TextColumn(disabled=True),
+                    "管理编号":st.column_config.TextColumn(disabled=True),"设备名称":st.column_config.TextColumn(disabled=True),
+                    "型号规格":st.column_config.TextColumn(disabled=True),"测量范围":st.column_config.TextColumn(disabled=True),
+                    "设备角色":st.column_config.TextColumn(disabled=True),"必需设备":st.column_config.TextColumn(disabled=True),
+                    "台账校准时间":st.column_config.TextColumn(disabled=True),"任务快照状态":st.column_config.TextColumn(disabled=True),
                     "本次使用":st.column_config.SelectboxColumn(options=["是","否"]),
                     "使用前状态":st.column_config.SelectboxColumn(options=["正常","异常","停用"]),
                     "异常说明":st.column_config.TextColumn(),
                 },
             )
             equipment_snapshot=equipment_df.to_dict("records")
-            required_issues=[
-                x for x in equipment_snapshot
-                if x.get("必需设备")=="是" and (
-                    x.get("本次使用")!="是" or x.get("使用前状态")!="正常"
-                )
-            ]
-            if required_issues:
-                st.warning("存在必需设备未使用或状态异常，提交时应在异常偏离中说明。")
-            for section in schema(kind)["sections"]:
-                st.subheader(section["title"]);columns=st.columns(3)
-                for i,field in enumerate(section["fields"]):
-                    with columns[i%3]:new_params[field["key"]]=field_widget(field,parameters.get(field["key"],field.get("default","")),f"{tn}_{version}")
-        with tabs[2]:new_rows=dataframe_editor(kind,rows0,f"data_{tn}_{version}");show_df(new_rows)
-        with tabs[3]:deviation=st.text_area("异常、偏离、影响评估和处理措施",prior.get("deviation",""));retest=st.selectbox("是否需要复测/重制",["否","是"],index=1 if prior.get("retest")=="是" else 0)
+            required_issues=[x for x in equipment_snapshot if x.get("必需设备")=="是" and (x.get("本次使用")!="是" or x.get("使用前状态")!="正常")]
+            if required_issues:st.warning("存在必需设备未使用或状态异常，应在异常与偏离记录中说明。")
+
+        with tabs[3]:
+            deviation=st.text_area("异常、偏离、影响评估和处理措施",prior.get("deviation",""))
+            retest=st.selectbox("是否需要复测/重制",["否","是"],index=1 if prior.get("retest")=="是" else 0)
+            report_summary=st.text_area("检验报告用结果摘要",prior.get("report_summary","") or "",help="仅用于汇总检验报告，不写入原始记录模板。")
+            report_conclusion=st.selectbox("检验报告用单项结论",["合格","不合格","仅描述结果","需复测/技术评审"],index=["合格","不合格","仅描述结果","需复测/技术评审"].index(prior.get("report_conclusion","合格")) if prior.get("report_conclusion","合格") in ["合格","不合格","仅描述结果","需复测/技术评审"] else 0)
+
         with tabs[4]:
-            attachments=list_attachments(task_no=tn);show_df(attachments,["attachment_id","sample_no","attachment_type","original_name","sha256","captured_at","uploader","description"])
-            atype=st.selectbox("附件类型",ATTACHMENT_TYPES);sample_no=st.selectbox("关联样品编号",[""]+sample_ids);captured=st.text_input("拍摄/生成时间（北京时间）",value=now())
-            equipment_options=[""]+[f"{x['管理编号']}｜{x['设备名称']}" for x in equipment_snapshot if x.get("本次使用")=="是"]
-            equipment=st.selectbox("设备或软件",equipment_options)
-            description=st.text_area("附件内容说明");files=st.file_uploader("上传电脑截图、实验过程照片、曲线或原始文件",accept_multiple_files=True,key=f"files_{tn}")
+            attachments=list_attachments(task_no=tn)
+            show_df(attachments,["attachment_id","sample_no","attachment_type","original_name","sha256","captured_at","uploader","description"])
+            atype=st.selectbox("附件类型",ATTACHMENT_TYPES)
+            sample_no=st.selectbox("关联样品编号",[""]+sample_ids)
+            captured=st.text_input("拍摄/生成时间（北京时间）",value=now())
+            description=st.text_area("附件内容说明")
+            files=st.file_uploader("上传电脑截图、实验过程照片、曲线或原始文件",accept_multiple_files=True,key=f"files_{tn}")
             if files and st.button("保存附件"):
-                for f in files:save_attachment({"commission_no":t["commission_no"],"package_no":t["package_no"],"task_no":tn,"sample_no":sample_no,"attachment_type":atype,"original_name":f.name,"captured_at":captured,"equipment_software":equipment,"description":description,"is_original":True},f.getvalue(),username)
+                for f in files:
+                    save_attachment({"commission_no":t["commission_no"],"package_no":t["package_no"],"task_no":tn,"sample_no":sample_no,"attachment_type":atype,"original_name":f.name,"captured_at":captured,"description":description,"is_original":True},f.getvalue(),username)
                 st.success("附件已保存并计算SHA-256校验值");st.rerun()
+            st.caption("附件详细索引不写入原始记录表，统一在内部实验数据追溯Excel中管理。")
+
         with tabs[5]:
-            reason=st.text_area("修改原因（首次记录可不填）",latest.get("change_reason","") if latest else "");tm_version=config_snapshot.get("record_template_version","") or "A/0";sm_version=config_snapshot.get("sop_version","") or "A/0";commission0=commission(t["commission_no"]);attachments=list_attachments(task_no=tn)
-            payload={"common":{"record_no":tn,"task_no":tn,"commission_no":t["commission_no"],"report_no":t["commission_no"],"client":commission0["client_name"],"sample_name":group(t["group_id"])["sample_name"],"sample_no":"、".join(sample_ids),"model":group(t["group_id"])["model"],"material":t["material_name"],"method_code":t["method_code"],"standard":t["standard"],"test_date":str(china_today()),"operator":user["display_name"],"reviewer":display_user(t["reviewer"])},"parameters":new_params,"equipment_snapshot":equipment_snapshot,"data":new_rows,"deviation":deviation,"retest":retest,"attachments":attachments,"configuration_snapshot":config_snapshot}
+            reason=st.text_area("修改原因（首次记录可不填）",latest.get("change_reason","") if latest else "")
+            missing=validate_template_fields(template_name,new_template_fields)
+            if missing:
+                st.error(f"当前仍有{len(missing)}项未完整填写，允许保存草稿，但不能提交复核。")
+                show_df(missing[:100],["section","label","position"])
+            else:
+                st.success("受控模板全部可填写项均已完成。")
+            if not report_summary.strip():st.warning("检验报告用结果摘要尚未填写，提交复核前需要补充。")
+            tm_version=config_snapshot.get("record_template_version","") or "A/0"
+            sm_version=config_snapshot.get("sop_version","") or "A/0"
+            attachments=list_attachments(task_no=tn)
+            payload={
+                "common":{"record_no":tn,"task_no":tn,"commission_no":t["commission_no"],"report_no":t["commission_no"],"client":commission0["client_name"],"sample_name":group0["sample_name"],"sample_no":"、".join(sample_ids),"model":group0["model"],"material":t["material_name"],"method_code":t["method_code"],"standard":t["standard"],"test_date":str(china_today()),"operator":user["display_name"],"reviewer":display_user(t["reviewer"])},
+                "template_name":template_name,"template_fields":new_template_fields,"equipment_snapshot":equipment_snapshot,
+                "deviation":deviation,"retest":retest,"report_summary":report_summary,"report_conclusion":report_conclusion,
+                "configuration_snapshot":config_snapshot,
+            }
             a,b=st.columns(2)
-            if a.button("保存草稿",use_container_width=True):save_record(tn,version,payload,username,"草稿",tm_version,sm_version,reason,compare);st.success("草稿已保存")
-            if b.button("提交复核",type="primary",use_container_width=True):save_record(tn,version,payload,username,"更正待复核" if version>1 else "待复核",tm_version,sm_version,reason,compare);st.rerun()
+            if a.button("保存草稿",use_container_width=True):
+                save_record(tn,version,payload,username,"草稿",tm_version,sm_version,reason,compare);st.success("草稿已保存")
+            submit_disabled=bool(missing) or not report_summary.strip()
+            if b.button("提交复核",type="primary",use_container_width=True,disabled=submit_disabled):
+                save_record(tn,version,payload,username,"更正待复核" if version>1 else "待复核",tm_version,sm_version,reason,compare);st.rerun()
 
 elif page=="原始记录复核":
-    header("逐实验原始记录复核")
-    rs=pending_reviews(None if role=="管理员" else username);show_df(rs,["record_no","version","package_no","group_no","experiment","owner","status","updated_at"])
+    header("按受控模板逐项复核原始记录")
+    rs=pending_reviews(None if role=="管理员" else username)
+    show_df(rs,["record_no","version","package_no","group_no","experiment","owner","status","updated_at"])
     if rs:
-        key=st.selectbox("选择记录",[f"{x['record_no']}|{x['version']}" for x in rs]);rn,v=key.split("|");r=record(rn,int(v));st.subheader("本次使用设备");show_df(r["payload"].get("equipment_snapshot",[]));st.subheader("过程参数");show_df([r["payload"].get("parameters",{})]);st.subheader("原始数据");show_df(r["payload"].get("data",[]));st.subheader("附件索引");show_df(r["payload"].get("attachments",[]),["attachment_id","attachment_type","original_name","sha256","description"]);comment=st.text_area("复核意见");a,b=st.columns(2)
-        if a.button("通过并锁定",type="primary"):review_record(rn,int(v),username,"通过",comment);st.rerun()
+        key=st.selectbox("选择记录",[f"{x['record_no']}|{x['version']}" for x in rs])
+        rn,v=key.split("|");r=record(rn,int(v));snap=task_config_snapshot(rn);template_name=snap.get("record_template_file","") or r["payload"].get("template_name","")
+        values=r["payload"].get("template_fields",{})
+        summary0=completion_summary(template_name,values) if template_name else {"total":0,"completed":0,"missing":0}
+        a,b,c=st.columns(3);a.metric("模板字段",summary0["total"]);b.metric("已填写",summary0["completed"]);c.metric("缺失",summary0["missing"])
+        if template_name:
+            fields={x["key"]:x for x in template_manifest(template_name)}
+            show_df([{"位置":fields.get(k,{}).get("position",k),"字段":fields.get(k,{}).get("label",k),"填写值":v0} for k,v0 in values.items()],["位置","字段","填写值"])
+            st.download_button("下载待复核原始记录预览",export_record(r,template_name,audit_logs(rn)),f"{rn}_V{v}_待复核原始记录.docx")
+        st.subheader("本次使用设备");show_df(r["payload"].get("equipment_snapshot",[]))
+        st.subheader("附件索引（独立追溯，不写入原始记录表）");show_df(list_attachments(task_no=rn),["attachment_id","attachment_type","original_name","sha256","description"])
+        comment=st.text_area("复核意见")
+        a,b=st.columns(2)
+        if a.button("通过并锁定",type="primary",disabled=summary0["missing"]>0):review_record(rn,int(v),username,"通过",comment);st.rerun()
         if b.button("退回修改"):review_record(rn,int(v),username,"退回",comment);st.rerun()
 
 elif page=="样品归还":
@@ -438,11 +558,16 @@ elif page=="回库确认":
         if st.button("确认整组回库",type="primary"):confirm_package_return(pn,username,[{"sample_no":r["样品编号"],"location":r["回库位置"]} for _,r in edit.iterrows()]);st.rerun()
 
 elif page=="附件与内部追溯":
-    header("电脑截图、实验照片、曲线和原始文件追溯")
-    cs=list_commissions();cn=st.selectbox("按委托筛选",[""]+[x["commission_no"] for x in cs]);attachments=list_attachments(commission_no=cn or None);show_df(attachments,["attachment_id","commission_no","package_no","task_no","sample_no","attachment_type","original_name","relative_path","sha256","captured_at","uploader","description"])
-    if TRACE_XLSX.exists():st.download_button("下载内部实验数据追溯Excel模板",TRACE_XLSX.read_bytes(),"BPLab_内部实验数据追溯工作簿.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    if attachments:
-        buf=io.StringIO();writer=csv.DictWriter(buf,fieldnames=list(attachments[0].keys()));writer.writeheader();writer.writerows(attachments);st.download_button("下载当前附件索引CSV",buf.getvalue().encode("utf-8-sig"),"附件索引.csv","text/csv")
+    header("电脑截图、实验照片、曲线和原始文件独立追溯")
+    cs=list_commissions();cn=st.selectbox("按委托筛选",[""]+[x["commission_no"] for x in cs])
+    attachments=list_attachments(commission_no=cn or None)
+    visible=attachments
+    show_df(visible,["attachment_id","commission_no","package_no","task_no","sample_no","attachment_type","original_name","relative_path","sha256","captured_at","uploader","description"])
+    st.caption("附件与原始记录通过委托编号、任务编号和样品编号关联；详细索引统一进入内部实验数据追溯Excel。")
+    if visible:
+        fieldnames=list(visible[0].keys())
+        buf=io.StringIO();writer=csv.DictWriter(buf,fieldnames=fieldnames);writer.writeheader();writer.writerows(visible)
+        st.download_button("下载当前附件索引CSV",buf.getvalue().encode("utf-8-sig"),"附件索引.csv","text/csv")
         aid=st.selectbox("预览/下载附件",[x["attachment_id"] for x in attachments]);meta=next(x for x in attachments if x["attachment_id"]==aid);path=attachment_file(meta)
         if path.exists():
             if path.suffix.lower() in [".png",".jpg",".jpeg",".webp"]:st.image(str(path),caption=meta["description"] or meta["original_name"])
@@ -453,6 +578,7 @@ elif page=="单据中心":
     cs=list_commissions();show_df(cs,["commission_no","client_name","commission_date","due_date","status"])
     if cs:
         cn=st.selectbox("选择委托",[x["commission_no"] for x in cs]);c0=commission(cn);groups=commission_groups(cn);samples0=commission_samples(cn);tests=commission_tests(cn);users0=user_map();st.download_button("下载检验委托单",commission_document(c0,groups,tests,display_user(c0["created_by"])),f"{cn}_检验委托单.docx");st.download_button("下载样品登记表",sample_register_document(c0,groups,samples0,tests,display_user(c0["created_by"])),f"{cn}_样品登记表.docx");st.download_button("下载样品领用归还登记表",loan_return_document(commission_loans(cn),users0),f"{cn}_样品领用归还登记表.docx")
+        st.download_button("下载内部实验数据追溯Excel",build_internal_trace_workbook(cn),f"{cn}_内部实验数据追溯工作簿.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         locked=[]
         for t in commission_tasks(cn):locked.extend([r for r in record_versions(t["task_no"]) if r["status"]=="已锁定"])
         if locked:

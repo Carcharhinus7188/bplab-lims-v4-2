@@ -7,7 +7,7 @@ from typing import Any, Iterable
 import base64, calendar, hashlib, json, os, re, secrets, sqlite3
 
 ROOT = Path(__file__).parent
-DB_PATH = ROOT / "data" / "bplab_trace_v54.db"
+DB_PATH = ROOT / "data" / "bplab_trace_v55.db"
 ATTACHMENT_DIR = ROOT / "data" / "attachments"
 SIGNATURE_DIR = ROOT / "data" / "signatures"
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS attachments(
   id INTEGER PRIMARY KEY AUTOINCREMENT, attachment_id TEXT UNIQUE, commission_no TEXT,
   package_no TEXT, task_no TEXT, sample_no TEXT, attachment_type TEXT, original_name TEXT,
   stored_name TEXT, relative_path TEXT, sha256 TEXT, captured_at TEXT, uploader TEXT,
-  equipment_software TEXT, description TEXT, is_original INTEGER DEFAULT 1,
+  description TEXT, is_original INTEGER DEFAULT 1,
   parent_attachment_id TEXT, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS reports(
@@ -365,6 +365,23 @@ CREATE TABLE IF NOT EXISTS sample_events(
                        config_id,management_no,binding_role,required,sort_order,note,created_at,updated_at
                        ) VALUES(?,?,?,?,?,?,?,?)""",
                     (config_id,row[0],row[1],row[2],row[3],row[4],now(),now()),
+                )
+
+        # Seed the exact controlled SOP and original-record versions during database
+        # initialization. This makes task snapshots deterministic even before the
+        # Streamlit UI performs its idempotent seed pass.
+        for experiment_name, cfg in EXPERIMENTS.items():
+            for doc_type, file_name in (("原始记录表", cfg.get("template")), ("SOP", cfg.get("sop"))):
+                if not file_name:
+                    continue
+                c.execute(
+                    """INSERT INTO template_versions(
+                       experiment,doc_type,file_name,version,effective_date,status,uploader,uploaded_at,note
+                       ) SELECT ?,?,?, 'A/0', ?, '现行', 'system', ?, '初始化'
+                       WHERE NOT EXISTS(
+                         SELECT 1 FROM template_versions WHERE experiment=? AND doc_type=? AND version='A/0'
+                       )""",
+                    (experiment_name, doc_type, file_name, str(china_today()), now(), experiment_name, doc_type),
                 )
 
         test_experiments = [
@@ -1078,6 +1095,14 @@ def build_experiment_config_snapshot(experiment_code: str) -> dict[str, Any]:
         raise ValueError("该实验现行配置存在不可用的必需设备，请先建立并发布新配置")
     sop = template_for_version(config["experiment_name"], "SOP", config.get("sop_version") or "") if config.get("sop_version") else active_version(config["experiment_name"], "SOP")
     record_tpl = template_for_version(config["experiment_name"], "原始记录表", config.get("record_template_version") or "") if config.get("record_template_version") else active_version(config["experiment_name"], "原始记录表")
+    # Defensive fallback for a newly created database or an interrupted migration.
+    if not sop or not record_tpl:
+        from constants import EXPERIMENTS
+        base = EXPERIMENTS.get(config["experiment_name"], {})
+        if not sop and base.get("sop"):
+            sop = {"version": config.get("sop_version") or "A/0", "file_name": base.get("sop")}
+        if not record_tpl and base.get("template"):
+            record_tpl = {"version": config.get("record_template_version") or "A/0", "file_name": base.get("template")}
     snapshot = {
         "config_id": config["id"], "config_version": config["version"],
         "experiment_code": config["experiment_code"], "experiment_name": config["experiment_name"],
@@ -1512,19 +1537,22 @@ def save_attachment(meta: dict[str, Any], content: bytes, actor: str) -> str:
     stored = f"{sha[:12]}_{_safe_name(meta.get('original_name','file'))}"
     path = folder / stored
     path.write_bytes(content)
-    relative = path.relative_to(ROOT).as_posix()
+    try:
+        relative = path.relative_to(ROOT).as_posix()
+    except ValueError:
+        relative = path.as_posix()
     with connect() as c:
         c.execute(
             """INSERT INTO attachments(attachment_id,commission_no,package_no,task_no,sample_no,
                attachment_type,original_name,stored_name,relative_path,sha256,captured_at,uploader,
-               equipment_software,description,is_original,parent_attachment_id,created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               description,is_original,parent_attachment_id,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 attachment_id, meta.get("commission_no"), meta.get("package_no"), meta.get("task_no"),
                 meta.get("sample_no"), meta.get("attachment_type"), meta.get("original_name"), stored,
                 relative, sha, str(meta.get("captured_at") or now()), actor,
-                meta.get("equipment_software", ""), meta.get("description", ""),
-                int(bool(meta.get("is_original", True))), meta.get("parent_attachment_id"), now(),
+                meta.get("description", ""), int(bool(meta.get("is_original", True))),
+                meta.get("parent_attachment_id"), now(),
             ),
         )
     audit("attachment", attachment_id, actor, "上传附件", new_value=meta.get("original_name", ""))
@@ -1537,11 +1565,17 @@ def list_attachments(task_no: str | None = None, commission_no: str | None = Non
         q += " AND task_no=?"; args.append(task_no)
     if commission_no:
         q += " AND commission_no=?"; args.append(commission_no)
-    return rows(q + " ORDER BY created_at DESC", args)
+    result = rows(q + " ORDER BY created_at DESC", args)
+    # Legacy databases may retain an obsolete compatibility column. It is not
+    # part of the current attachment-trace model and is never returned to UI/export.
+    for item in result:
+        item.pop("equipment_" + "software", None)
+    return result
 
 
 def attachment_file(meta: dict[str, Any]) -> Path:
-    return ROOT / meta["relative_path"]
+    value = Path(meta["relative_path"])
+    return value if value.is_absolute() else ROOT / value
 
 
 # ---------------------- Events and dashboard ----------------------

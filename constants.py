@@ -5,7 +5,7 @@ COMPANY_CN = "大连标普检测有限公司"
 COMPANY_EN = "DALIAN BIAOPU TESTING CO., LTD."
 SYSTEM_CN = "大连标普实验室样品全过程追溯系统"
 SYSTEM_EN = "BPLab Sample Lifecycle Tracking System"
-APP_VERSION = "BPLab Trace V5.4 实验与设备动态配置版"
+APP_VERSION = "BPLab Trace V5.5 原始记录模板直填版"
 TIMEZONE_NAME = "Asia/Shanghai"
 
 STORAGE_AREAS = ["A区域", "B区域"]
@@ -45,65 +45,65 @@ EXPERIMENTS = {
         "key": "I001", "category": "增材制造检测",
         "std": "YY/T 1702-2020；GB/T 10610-2009",
         "method": "YY/T 1702", "kind": "rough",
-        "template": None, "sop": "SOP_ROUGHNESS.docx",
+        "template": "RECORD_R001_ROUGHNESS.docx", "sop": "SOP_R001_ROUGHNESS.docx",
     },
     "金属-陶瓷结合裂纹萌生试验": {
         "key": "I002", "category": "力学性能检测",
         "std": "YY 0621.1-2016 / ISO 9693-1",
         "method": "YY 0621.1", "kind": "mc_crack",
-        "template": "RECORD_MC_CRACK_INITIATION.docx",
-        "sop": "SOP_MC_CRACK_INITIATION.docx",
+        "template": "RECORD_R004_MC_CRACK.docx",
+        "sop": "SOP_R004_MC_CRACK.docx",
     },
     "金属内部质量X射线灰度分析": {
         "key": "I003", "category": "内部质量检测",
         "std": "GB 17168及实验室受控SOP",
         "method": "GB 17168", "kind": "xray",
-        "template": "RECORD_XRAY_INTERNAL_QUALITY.docx",
-        "sop": "SOP_XRAY_INTERNAL_QUALITY.docx",
+        "template": "RECORD_R005_XRAY.docx",
+        "sop": "SOP_R005_XRAY.docx",
     },
     "翘曲变形试验": {
         "key": "I004", "category": "增材制造检测",
         "std": "YY/T 1702-2020 第7.3.2条",
         "method": "YY/T 1702", "kind": "warp",
-        "template": "RECORD_WARPAGE.docx", "sop": "SOP_WARPAGE.docx",
+        "template": "RECORD_R006_WARPAGE.docx", "sop": "SOP_R007_WARPAGE.docx",
     },
     "热膨胀系数试验": {
         "key": "I005", "category": "物理性能检测",
         "std": "YY 0621.1及实验室受控SOP",
         "method": "YY 0621.1", "kind": "cte",
-        "template": "RECORD_CTE.docx", "sop": None,
+        "template": "RECORD_R007_CTE.docx", "sop": "SOP_R009_CTE.docx",
     },
     "陶瓷牙耐急冷急热试验": {
         "key": "I006", "category": "陶瓷材料检测",
         "std": "YY 0300-2009 第7.10条",
         "method": "YY 0300", "kind": "shock",
-        "template": "RECORD_THERMAL_SHOCK.docx",
-        "sop": "SOP_THERMAL_SHOCK.docx",
+        "template": "RECORD_R009_THERMAL_SHOCK.docx",
+        "sop": "SOP_R010_THERMAL_SHOCK.docx",
     },
     "弯曲性能试验": {
         "key": "I007", "category": "力学性能检测",
         "std": "YY/T 1702-2020",
         "method": "YY/T 1702", "kind": "bend",
-        "template": "RECORD_BENDING.docx", "sop": "SOP_BENDING.docx",
+        "template": "RECORD_R010_BENDING.docx", "sop": "SOP_R011_BENDING.docx",
     },
     "维氏硬度试验": {
         "key": "I008", "category": "力学性能检测",
-        "std": "GB/T 4340.1-2009",
+        "std": "GB/T 4340.1-2024",
         "method": "GB/T 4340.1", "kind": "hv",
-        "template": "RECORD_VICKERS_HARDNESS.docx", "sop": None,
+        "template": "RECORD_R011_VICKERS.docx", "sop": "SOP_R013_VICKERS.docx",
     },
     "增材制造金属试样厚度测量": {
         "key": "I009", "category": "增材制造检测",
         "std": "YY/T 1702-2020",
         "method": "YY/T 1702", "kind": "thickness",
-        "template": "RECORD_THICKNESS.docx", "sop": "SOP_THICKNESS.docx",
+        "template": "RECORD_R013_THICKNESS.docx", "sop": "SOP_R008_THICKNESS.docx",
     },
     "牙科材料色稳定性试验": {
         "key": "I010", "category": "物理性能检测",
         "std": "YY 0710及产品技术要求",
         "method": "YY 0710", "kind": "color",
-        "template": "RECORD_COLOR_STABILITY.docx",
-        "sop": "SOP_COLOR_STABILITY.docx",
+        "template": "RECORD_R012_COLOR_STABILITY.docx",
+        "sop": "SOP_R012_COLOR_STABILITY.docx",
     },
 }
 
