@@ -7,6 +7,8 @@ import tempfile
 from pathlib import Path
 
 import lims_db
+from business_record_ui import _number_profile
+from business_record_engine import HIDDEN_PARAMETER_KEYS
 from experiment_engine import calculate_rows
 
 
@@ -26,6 +28,11 @@ def main() -> None:
     assert "本样品组待下发实验（自动继承，只读）" in assignment_block
     assert "收样员无需再次选择" in assignment_block
     assert "实时计算与判定" in (ROOT / "business_record_ui.py").read_text(encoding="utf-8")
+    assert _number_profile("h1", "H1/mm") == (0.001, "%.3f")
+    assert _number_profile("temperature_before", "检测前温度/℃") == (0.1, "%.1f")
+    assert _number_profile("humidity_before", "检测前湿度/%RH") == (1.0, "%.0f")
+    assert _number_profile("exposure_count", "曝光次数") == (1.0, "%.0f")
+    assert {"start_time", "end_time"} <= HIDDEN_PARAMETER_KEYS
 
     with tempfile.TemporaryDirectory() as temp_raw:
         temp = Path(temp_raw)
@@ -124,7 +131,7 @@ def main() -> None:
             columns = {item[1] for item in connection.execute("PRAGMA table_info(tasks)")}
         assert {"detection_location", "experiment_started_at", "experiment_ended_at"} <= columns
 
-    print("V5.7.3 WORKFLOW UPDATE PASSED: automatic task inheritance, locations, timeline and live results")
+    print("V5.7.4 WORKFLOW UPDATE PASSED: improved numeric steppers, keyboard entry, timeline synchronization and inherited tasks")
 
 
 if __name__ == "__main__":

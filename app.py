@@ -42,6 +42,7 @@ html,body,.stApp,[data-testid=stAppViewContainer]{background:var(--bg);color:#17
 [data-testid=stExpander]{background:white;border-color:var(--line);border-radius:12px}
 div[data-testid=stForm],div[data-testid=stVerticalBlockBorderWrapper]{border-color:var(--line)!important;border-radius:14px}
 input,textarea{border-radius:9px!important}
+[data-testid=stNumberInput] button{min-width:40px;min-height:40px;font-size:1.05rem}
 </style>
 """,unsafe_allow_html=True)
 

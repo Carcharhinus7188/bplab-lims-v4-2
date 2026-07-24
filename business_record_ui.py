@@ -26,13 +26,47 @@ def _safe_number(value: Any, default: float | None = None) -> float | None:
         return default
 
 
+def _number_profile(key: str, label: str) -> tuple[float, str]:
+    """Return a practical +/- step while preserving direct keyboard entry."""
+    text = f"{key} {label}".lower()
+    if any(term in text for term in ("次数", "个数", "count")):
+        return 1.0, "%.0f"
+    if any(term in text for term in ("灰度", "照度", "/lx", "illuminance")):
+        return 1.0, "%.0f"
+    if any(term in text for term in ("湿度", "%rh", "humidity")):
+        return 1.0, "%.0f"
+    if any(term in text for term in ("温度", "temperature")):
+        return 0.1, "%.1f"
+    if any(term in text for term in ("/hv", "硬度")):
+        return 0.1, "%.1f"
+    if any(term in text for term in ("时间/h", "时间/min", "时间/s", "时间/ms", "runtime", "time")):
+        return 0.1, "%.1f"
+    if any(term in text for term in ("/mm", "/μm", "/mpa", "/gpa", "/n", "应变", "系数", "偏差", "间隙", "长度", "厚度", "宽度", "高度", "直径")):
+        return 0.001, "%.3f"
+    return 0.01, "%.2f"
+
+
+def _number_input(label: str, value: Any, key: str, field_key: str, help_text: str | None = None, default: Any = None):
+    step, number_format = _number_profile(field_key, label)
+    guidance = f"可直接用键盘输入；点击＋/－每次调整 {step:g}。"
+    return st.number_input(
+        label,
+        value=_safe_number(value, _safe_number(default)),
+        step=step,
+        format=number_format,
+        key=key,
+        help=f"{help_text}；{guidance}" if help_text else guidance,
+        placeholder="请填写实测值",
+    )
+
+
 def _widget(field: dict[str, Any], value: Any, key: str):
     typ = field.get("type", "text")
     label = field.get("label", field.get("key", "字段"))
     help_text = field.get("help")
     if typ == "number":
         default = field.get("default") if field.get("default") not in ("", None) else None
-        return st.number_input(label, value=_safe_number(value, default), key=key, help=help_text, placeholder="请填写实测值")
+        return _number_input(label, value, key, field.get("key", ""), help_text, default)
     if typ == "date":
         parsed = value
         if isinstance(value, str) and value:
@@ -207,7 +241,7 @@ def _render_row_field(kind: str, field: tuple[str, str, str], row: dict[str, Any
         st.metric(label, value if value not in (None, "") else "—")
         return value
     if typ == "number":
-        return st.number_input(label, value=_safe_number(value), key=f"{key_prefix}_{key}", placeholder="请填写实测值")
+        return _number_input(label, value, f"{key_prefix}_{key}", key)
     if typ.startswith("select:"):
         options = typ.split(":", 1)[1].split("|")
         selected = value if value in options else options[0]
@@ -219,7 +253,7 @@ def _render_row_field(kind: str, field: tuple[str, str, str], row: dict[str, Any
 
 def render_sample_data(kind: str, record: dict[str, Any], key_prefix: str) -> list[dict[str, Any]]:
     st.subheader("原始测量数据")
-    st.caption("按样品逐个填写。平均值、计算结果和符合性会随原始数据实时刷新；图片、曲线和原始文件编号由附件追溯自动关联。")
+    st.caption("按样品逐个填写。所有数值既可键盘直接输入，也可用＋/－按字段精度微调；平均值、计算结果和符合性会实时刷新。")
     rows = [dict(x) for x in record.get("rows") or []]
     fields = visible_row_fields(kind)
     groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
