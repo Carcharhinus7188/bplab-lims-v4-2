@@ -20,10 +20,11 @@ def main() -> None:
     assert "记录实验开始时间" in app_text
     assert "记录实验结束时间" in app_text
     assignment_block = app_text.split('elif page=="任务包分配":', 1)[1].split('elif page=="我的任务包":', 1)[0]
-    assert 'st.multiselect("本次任务包包含的检测项目"' in assignment_block
-    assert 'format_func=lambda x:pending_map[x]["experiment"]' in assignment_block
+    assert "st.multiselect" not in assignment_block
+    assert "experiment_codes=list(pending_map)" in assignment_block
     assert "本次任务包包含的检测项目与方法" not in assignment_block
-    assert "自动继承信息（只读）" in assignment_block
+    assert "本样品组待下发实验（自动继承，只读）" in assignment_block
+    assert "收样员无需再次选择" in assignment_block
     assert "实时计算与判定" in (ROOT / "business_record_ui.py").read_text(encoding="utf-8")
 
     with tempfile.TemporaryDirectory() as temp_raw:
@@ -123,7 +124,7 @@ def main() -> None:
             columns = {item[1] for item in connection.execute("PRAGMA table_info(tasks)")}
         assert {"detection_location", "experiment_started_at", "experiment_ended_at"} <= columns
 
-    print("V5.7.2 WORKFLOW UPDATE PASSED: project-only assignment, inherited methods, locations, timeline and live results")
+    print("V5.7.3 WORKFLOW UPDATE PASSED: automatic task inheritance, locations, timeline and live results")
 
 
 if __name__ == "__main__":

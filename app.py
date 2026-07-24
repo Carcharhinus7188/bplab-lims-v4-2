@@ -327,22 +327,20 @@ elif page=="任务包分配":
         gid=st.selectbox("样品组",[g["id"] for g in groups],format_func=lambda x:next(f"{g['group_no']} {g['sample_name']}" for g in groups if g["id"]==x))
         pending=[x for x in requested_tests(gid) if x["status"]=="待分配"]
         pending_map={x["experiment_code"]:x for x in pending}
-        experiment_codes=st.multiselect("本次任务包包含的检测项目",list(pending_map),default=[],
-            format_func=lambda x:pending_map[x]["experiment"])
-        st.caption("这里只选择本次下发的实验项目。检测方法、检测依据、SOP和记录模板均从委托及现行配置自动继承，不在此处重复选择。")
-        if experiment_codes:
-            st.markdown("**自动继承信息（只读）**")
-            show_df(
-                [
-                    {
-                        "检测项目":pending_map[code]["experiment"],
-                        "检测方法":pending_map[code]["method_code"],
-                        "检测依据":pending_map[code]["standard"],
-                    }
-                    for code in experiment_codes
-                ],
-                ["检测项目","检测方法","检测依据"],
-            )
+        experiment_codes=list(pending_map)
+        st.markdown("**本样品组待下发实验（自动继承，只读）**")
+        show_df(
+            [
+                {
+                    "检测项目":pending_map[code]["experiment"],
+                    "检测方法":pending_map[code]["method_code"],
+                    "检测依据":pending_map[code]["standard"],
+                }
+                for code in experiment_codes
+            ],
+            ["检测项目","检测方法","检测依据"],
+        )
+        st.caption("检测项目已在收样入库阶段确定。本任务包自动包含该样品组全部待分配实验，收样员无需再次选择。")
         testers=role_users("实验人员");reviewers=role_users("复核实验员")
         a,b=st.columns(2)
         assignee=a.selectbox("实验员",[x["username"] for x in testers],format_func=display_user)
