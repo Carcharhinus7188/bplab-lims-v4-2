@@ -100,6 +100,30 @@ def dataframe_editor(kind,rows0,key):
     return calculate_rows(kind,edited.to_dict("records"))
 
 
+def render_experiment_timeline(task_row, actor, key_prefix):
+    """Compact event timeline; experiment times are captured, never typed."""
+    start_at=task_row.get("experiment_started_at") or ""
+    end_at=task_row.get("experiment_ended_at") or ""
+    st.subheader("实验时间轴")
+    a,b,c=st.columns([1,1,1])
+    a.markdown(f'<div class="timeline"><b>任务接收</b><br>{task_row.get("created_at") or "已建立任务"}</div>',unsafe_allow_html=True)
+    b.markdown(f'<div class="timeline"><b>实验开始</b><br>{start_at.replace("T"," ") if start_at else "等待记录"}</div>',unsafe_allow_html=True)
+    c.markdown(f'<div class="timeline"><b>实验结束</b><br>{end_at.replace("T"," ") if end_at else "等待记录"}</div>',unsafe_allow_html=True)
+    x,y=st.columns(2)
+    if x.button("记录实验开始时间",disabled=bool(start_at),use_container_width=True,key=f"{key_prefix}_timeline_start"):
+        try:
+            mark_task_experiment_time(task_row["task_no"],actor,"开始")
+            st.rerun()
+        except Exception as e:st.error(str(e))
+    if y.button("记录实验结束时间",disabled=not start_at or bool(end_at),use_container_width=True,key=f"{key_prefix}_timeline_end"):
+        try:
+            mark_task_experiment_time(task_row["task_no"],actor,"结束")
+            st.rerun()
+        except Exception as e:st.error(str(e))
+    st.caption("时间由系统按中国大陆时区自动记录并进入审计时间轴，不再单独手工输入。")
+    return start_at,end_at
+
+
 init_db()
 for exp,cfg in EXPERIMENTS.items():
     seed_template(exp,"原始记录表",cfg.get("template"));seed_template(exp,"SOP",cfg.get("sop"))
@@ -235,8 +259,9 @@ elif page=="新建委托与入库":
         unit=a.text_input("单位",value=cat["unit"])
         condition_note=b.text_input("状态备注")
         exp_codes=st.multiselect("检测项目与方法",[x["experiment_code"] for x in method_rows],
-            default=[x for x in cat.get("experiment_codes_list",[]) if x in method_map],
+            default=[],
             format_func=lambda x:f"{method_map[x]['experiment_name']}｜{method_map[x]['method_code']}")
+        st.caption("不预设检测项目，请根据本次委托逐项手动选择。")
         group_notes=st.text_area("样品组备注")
         if st.form_submit_button("加入本委托的样品明细"):
             normalized_group=group_no.strip().upper().replace(" ","")
@@ -302,8 +327,9 @@ elif page=="任务包分配":
         gid=st.selectbox("样品组",[g["id"] for g in groups],format_func=lambda x:next(f"{g['group_no']} {g['sample_name']}" for g in groups if g["id"]==x))
         pending=[x for x in requested_tests(gid) if x["status"]=="待分配"]
         pending_map={x["experiment_code"]:x for x in pending}
-        experiment_codes=st.multiselect("本次任务包包含的检测项目与方法",list(pending_map),default=list(pending_map),
+        experiment_codes=st.multiselect("本次任务包包含的检测项目与方法",list(pending_map),default=[],
             format_func=lambda x:f"{pending_map[x]['experiment']}｜{pending_map[x]['method_code']}")
+        st.caption("系统不再默认全选，请手动选择本次实际下发的实验。")
         testers=role_users("实验人员");reviewers=role_users("复核实验员")
         a,b=st.columns(2)
         assignee=a.selectbox("实验员",[x["username"] for x in testers],format_func=display_user)
@@ -318,19 +344,26 @@ elif page=="我的任务包":
     header("任务提醒、整组样品领用和多个实验子任务")
     packages=list_packages(None if role=="管理员" else role,None if role=="管理员" else username);show_df(packages,["package_no","commission_no","group_no","material_name","experiments","status","assigned_at","accepted_at","detection_location"])
     if packages:
-        pn=st.selectbox("选择任务包",[x["package_no"] for x in packages]);p=package(pn);show_df(package_tasks(pn),["task_no","experiment","method_code","standard","material_name","status"])
+        pn=st.selectbox("选择任务包",[x["package_no"] for x in packages]);p=package(pn);package_task_rows=package_tasks(pn);show_df(package_task_rows,["task_no","experiment","method_code","standard","material_name","detection_location","status"])
         if p["status"]=="待接收" and username==p["assignee"]:
             result=st.radio("样品实物接收确认",["样品已收到，确认完好","样品已收到，但存在异常","尚未收到样品"])
-            recommended=[device_preset(x).get("default_location","") for x in p["experiments_list"]]
-            recommended=next((x for x in recommended if x in DETECTION_LOCATIONS),DETECTION_LOCATIONS[0])
-            location=st.selectbox(
-                "主要检测位置（由实验员确定）",
-                DETECTION_LOCATIONS,
-                index=DETECTION_LOCATIONS.index(recommended),
-            )
+            st.subheader("逐实验选择检测位置")
+            st.caption("每个实验独立选择，允许同一任务包内的实验使用不同检测位置。推荐地点仅作默认值，可按实际情况修改。")
+            task_locations={}
+            location_cols=st.columns(2)
+            for index,item in enumerate(package_task_rows):
+                recommended=device_preset(item["experiment"]).get("default_location","")
+                if recommended not in DETECTION_LOCATIONS:recommended=DETECTION_LOCATIONS[0]
+                with location_cols[index%2]:
+                    task_locations[item["task_no"]]=st.selectbox(
+                        f"{item['experiment']}｜{item['method_code']}",
+                        DETECTION_LOCATIONS,
+                        index=DETECTION_LOCATIONS.index(recommended),
+                        key=f"task_location_{item['task_no']}",
+                    )
             note=st.text_area("领用/异常备注")
             if st.button("确认整组样品领用",type="primary"):
-                try:accept_package(pn,username,result,location,note);st.rerun()
+                try:accept_package(pn,username,result,task_locations,note);st.rerun()
                 except Exception as e:st.error(str(e))
 
 elif page=="实验记录":
@@ -382,18 +415,29 @@ elif page=="实验记录":
             "report_no":t.get("commission_no",""),
             "task_no":tn,
             "test_date":str(china_today()),
-            "detection_location":package0.get("detection_location",""),
+            "detection_location":t.get("detection_location") or package0.get("detection_location",""),
             "standard":t.get("standard",""),
             "method_code":t.get("method_code",""),
             "operator":user["display_name"],
             "reviewer":display_user(t.get("reviewer","")),
         }
-        business=initialize_business_record(kind,sample_ids,package0.get("detection_location",""),prior.get("business_record") or {})
+        task_location=t.get("detection_location") or package0.get("detection_location","")
+        business=initialize_business_record(kind,sample_ids,task_location,prior.get("business_record") or {})
+        business.setdefault("parameters",{})["detection_location"]=task_location
+        if t.get("experiment_started_at"):
+            business["parameters"]["start_time"]=str(t["experiment_started_at"]).replace("T"," ")
+            business["parameters"]["test_date"]=str(t["experiment_started_at"])[:10]
+        if t.get("experiment_ended_at"):
+            business["parameters"]["end_time"]=str(t["experiment_ended_at"]).replace("T"," ")
         key_prefix=f"simple_{tn}_{version}"
         st.info(f"{t['experiment']}｜{t['method_code']}｜{len(sample_ids)}件样品。已知信息自动带入，正常选项已设置为默认值；实验员只需确认现场状态并填写实际测量数据。")
         tabs=st.tabs(["①任务确认","②设备与实验前检查","③环境与参数","④原始数据","⑤异常与附件","⑥保存提交"])
         with tabs[0]:
             render_readonly_summary(t,group0,commission0,package0,config_snapshot)
+            start_at,end_at=render_experiment_timeline(t,username,key_prefix)
+            business["parameters"]["start_time"]=str(start_at).replace("T"," ") if start_at else ""
+            business["parameters"]["end_time"]=str(end_at).replace("T"," ") if end_at else ""
+            if start_at:business["parameters"]["test_date"]=str(start_at)[:10]
             business["task_confirmations"]=render_task_confirmations(business,key_prefix)
         with tabs[1]:
             business["equipment_checks"]=render_equipment_confirmation(bound_devices,business.get("equipment_checks") or [],key_prefix)

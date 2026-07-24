@@ -36,6 +36,8 @@ def _context(experiment, sample_ids):
 def _demo_business(kind, sample_ids):
     record=initialize_business_record(kind,sample_ids,"性能检测室",{})
     params=record["parameters"]
+    params["start_time"]="2026-07-23T10:00:00"
+    params["end_time"]="2026-07-23T10:30:00"
     # Fill every visible manual parameter with a realistic, non-empty QA value.
     for field in fixed_and_manual_fields(kind)[1]:
         key=field["key"];typ=field.get("type","text")
@@ -115,7 +117,11 @@ def main():
         catalog=next(x for x in lims_db.list_catalog() if x["sample_code"]=="S001");cn="WT20260723001"
         lims_db.create_commission({"commission_no":cn,"client_org_id":client["id"],"client_name":client["org_name"],"client_address":client["address"],"contact":client["contact"],"phone":client["phone"],"production_org_id":producer["id"],"production_org_name":producer["org_name"],"production_relation":"生产单位","commission_date":"2026-07-23","due_date":"2026-08-23","subcontract_allowed":"否","report_medium":"电子档","conformity_judgment":"是","uncertainty":"否","delivery_method":"Email","cnas_mark":"否","capability":"完全满足","notes":""},[{"group_no":"BP20260723001","catalog_id":catalog["id"],"sample_name":catalog["sample_name"],"model":catalog["model"],"material_name":catalog["material_name"],"product_no":"B001","quantity":3,"unit":"件","condition":"完好","condition_note":"","storage_area":"A区域","notes":"","experiment_codes":[method["experiment_code"]]}],"receiver")
         group=lims_db.commission_groups(cn)[0];pn=lims_db.create_task_package(group["id"],[method["experiment_code"]],"tester","reviewer","receiver")
-        task=lims_db.package_tasks(pn)[0];lims_db.accept_package(pn,"tester","样品已收到，确认完好","性能检测室","正常")
+        task=lims_db.package_tasks(pn)[0];lims_db.accept_package(pn,"tester","样品已收到，确认完好",{task["task_no"]:"显微检测室"},"正常")
+        task=lims_db.task(task["task_no"]);assert task["detection_location"]=="显微检测室"
+        lims_db.mark_task_experiment_time(task["task_no"],"tester","开始")
+        lims_db.mark_task_experiment_time(task["task_no"],"tester","结束")
+        task=lims_db.task(task["task_no"]);assert task["experiment_started_at"] and task["experiment_ended_at"]
         snapshot=lims_db.task_config_snapshot(task["task_no"]);assert snapshot["record_template_file"]=="RECORD_R011_VICKERS.docx"
         business=_demo_business("hv",task["sample_nos_list"])
         context=_context("维氏硬度试验",task["sample_nos_list"]);context.update({"task_no":task["task_no"]})

@@ -16,7 +16,7 @@ from template_record_engine import (
 
 # Fields that are supplied by the workflow, equipment snapshot or attachment index.
 HIDDEN_PARAMETER_KEYS = {
-    "detection_location", "software", "data_path",
+    "detection_location", "software", "data_path", "start_time", "end_time",
     "equipment_name", "equipment_model", "equipment_no",
     "calibration_certificate", "calibration_due", "equipment_status",
     "image_path", "image_before_path", "image_after_path", "curve_path",
@@ -25,7 +25,7 @@ HIDDEN_PARAMETER_KEYS = {
 # These fields always remain visible because they are actual conditions at the time of testing.
 ALWAYS_EDIT_PARAMETER_KEYS = {
     "test_date", "temperature_before", "temperature_after",
-    "humidity_before", "humidity_after", "start_time", "end_time",
+    "humidity_before", "humidity_after",
 }
 
 # File/index fields are filled from the internal trace index rather than manually repeated.
@@ -365,6 +365,10 @@ def validate_business_record(kind: str, record: dict[str, Any], required_equipme
         issues.append("存在未通过的实验前检查项，但未填写说明")
 
     params = record.get("parameters") or {}
+    if not str(params.get("start_time") or "").strip():
+        issues.append("尚未通过时间轴记录实验开始时间")
+    if not str(params.get("end_time") or "").strip():
+        issues.append("尚未通过时间轴记录实验结束时间")
     for field in fixed_and_manual_fields(kind)[1]:
         key = field["key"]
         if key in OPTIONAL_PARAMETER_KEYS:

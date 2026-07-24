@@ -184,7 +184,9 @@ CREATE TABLE IF NOT EXISTS tasks(
   group_id INTEGER NOT NULL, group_no TEXT NOT NULL, sample_nos TEXT,
   experiment_code TEXT NOT NULL, experiment TEXT,
   method_code TEXT, standard TEXT, material_name TEXT, assignee TEXT, reviewer TEXT,
-  status TEXT DEFAULT '待接收', created_at TEXT, updated_at TEXT
+  status TEXT DEFAULT '待接收', detection_location TEXT,
+  experiment_started_at TEXT, experiment_ended_at TEXT,
+  created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS records(
   id INTEGER PRIMARY KEY AUTOINCREMENT, record_no TEXT NOT NULL, task_no TEXT NOT NULL,
@@ -238,6 +240,17 @@ CREATE TABLE IF NOT EXISTS sample_events(
 );
 """
         )
+        # Non-destructive migration for databases created by V5.7 and earlier.
+        task_columns = {
+            item[1] for item in c.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        for column_name, column_type in (
+            ("detection_location", "TEXT"),
+            ("experiment_started_at", "TEXT"),
+            ("experiment_ended_at", "TEXT"),
+        ):
+            if column_name not in task_columns:
+                c.execute(f"ALTER TABLE tasks ADD COLUMN {column_name} {column_type}")
         demo_users = [
             ("admin", "系统管理员", "admin123", "管理员"),
             ("receiver", "样品管理员王工", "receive123", "样品管理员"),
@@ -1295,7 +1308,13 @@ def task(task_no: str) -> dict[str, Any] | None:
     return r
 
 
-def accept_package(package_no: str, actor: str, result: str, detection_location: str, note: str) -> None:
+def accept_package(
+    package_no: str,
+    actor: str,
+    result: str,
+    detection_locations: dict[str, str] | str,
+    note: str,
+) -> None:
     p = package(package_no)
     if not p or p["assignee"] != actor:
         raise ValueError("只能由被指定的实验员接收任务包")
@@ -1306,30 +1325,121 @@ def accept_package(package_no: str, actor: str, result: str, detection_location:
             c.execute("UPDATE task_packages SET status='接收异常',accepted_at=?,acceptance_result=?,acceptance_note=?,updated_at=? WHERE package_no=?", (now(), result, note, now(), package_no))
         audit("task_package", package_no, actor, "接收异常", reason=note)
         return
+    task_rows = package_tasks(package_no)
+    if isinstance(detection_locations, str):
+        location_map = {item["task_no"]: detection_locations for item in task_rows}
+    else:
+        location_map = {
+            str(task_no): str(location or "").strip()
+            for task_no, location in detection_locations.items()
+        }
+    from constants import DETECTION_LOCATIONS
+    missing = [item["experiment"] for item in task_rows if not location_map.get(item["task_no"])]
+    if missing:
+        raise ValueError("请为每个实验选择检测位置：" + "、".join(missing))
+    invalid = [
+        location_map[item["task_no"]]
+        for item in task_rows
+        if location_map[item["task_no"]] not in DETECTION_LOCATIONS
+    ]
+    if invalid:
+        raise ValueError("检测位置不在受控地点清单中：" + "、".join(dict.fromkeys(invalid)))
+
     ts = now()
     purpose = "、".join(p["experiments_list"])
+    unique_locations = list(dict.fromkeys(location_map.values()))
+    location_summary = unique_locations[0] if len(unique_locations) == 1 else "多地点流转"
     with connect() as c:
         c.execute(
             """UPDATE task_packages SET status='检测中',accepted_at=?,detection_location=?,
                acceptance_result=?,acceptance_note=?,updated_at=? WHERE package_no=?""",
-            (ts, detection_location, result, note, ts, package_no),
+            (ts, location_summary, result, note, ts, package_no),
         )
-        c.execute("UPDATE tasks SET status='检测中',updated_at=? WHERE package_no=?", (ts, package_no))
+        for item in task_rows:
+            task_no = item["task_no"]
+            location = location_map[task_no]
+            c.execute(
+                """UPDATE tasks SET status='检测中',detection_location=?,updated_at=?
+                   WHERE task_no=?""",
+                (location, ts, task_no),
+            )
+            snapshot_row = c.execute(
+                "SELECT snapshot_json FROM task_config_snapshots WHERE task_no=?",
+                (task_no,),
+            ).fetchone()
+            if snapshot_row:
+                snapshot = json.loads(snapshot_row[0] or "{}")
+                snapshot["selected_detection_location"] = location
+                raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+                snapshot_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                snapshot["snapshot_hash"] = snapshot_hash
+                c.execute(
+                    """UPDATE task_config_snapshots
+                       SET snapshot_json=?,snapshot_hash=? WHERE task_no=?""",
+                    (
+                        json.dumps(snapshot, ensure_ascii=False, default=str),
+                        snapshot_hash,
+                        task_no,
+                    ),
+                )
         c.execute("UPDATE sample_groups SET status='检测中',updated_at=? WHERE id=?", (ts, p["group_id"]))
         for sample_no in p["sample_nos_list"]:
             old = one("SELECT status,current_location FROM samples WHERE sample_no=?", (sample_no,)) or {}
-            c.execute("UPDATE samples SET status='检测中',current_location=?,current_holder=?,updated_at=? WHERE sample_no=?", (detection_location, actor, ts, sample_no))
+            c.execute("UPDATE samples SET status='检测中',current_location=?,current_holder=?,updated_at=? WHERE sample_no=?", (location_summary, actor, ts, sample_no))
             c.execute(
                 """INSERT OR REPLACE INTO package_loans(package_no,sample_no,borrower,borrowed_at,purpose,
                    detection_location,issue_note,return_status) VALUES(?,?,?,?,?,?,?,'未归还')""",
-                (package_no, sample_no, actor, ts, purpose, detection_location, note),
+                (package_no, sample_no, actor, ts, purpose, location_summary, note),
             )
             c.execute(
                 """INSERT INTO sample_events(sample_no,actor,action,from_status,to_status,from_location,
                    to_location,details,created_at) VALUES(?,?,'实验员领用',?,'检测中',?,?,?,?)""",
-                (sample_no, actor, old.get("status", ""), old.get("current_location", ""), detection_location, f"任务包:{package_no};用途:{purpose};{note}", ts),
+                (sample_no, actor, old.get("status", ""), old.get("current_location", ""), location_summary, f"任务包:{package_no};用途:{purpose};{note}", ts),
             )
-    audit("task_package", package_no, actor, "确认领用", new_value=detection_location)
+    audit(
+        "task_package",
+        package_no,
+        actor,
+        "确认领用",
+        new_value=json.dumps(location_map, ensure_ascii=False),
+    )
+
+
+def mark_task_experiment_time(task_no: str, actor: str, action: str) -> dict[str, Any]:
+    """Record experiment start/end as immutable timeline events, not manual text."""
+    item = task(task_no)
+    if not item:
+        raise ValueError("实验任务不存在")
+    if item.get("assignee") != actor:
+        raise ValueError("只能由该任务的实验员记录实验时间")
+    if item.get("status") not in ("检测中", "退回修改"):
+        raise ValueError("当前任务状态不能记录实验时间")
+    ts = now()
+    if action == "开始":
+        if item.get("experiment_started_at"):
+            return item
+        with connect() as c:
+            c.execute(
+                """UPDATE tasks SET experiment_started_at=?,updated_at=?
+                   WHERE task_no=?""",
+                (ts, ts, task_no),
+            )
+        audit("task", task_no, actor, "实验开始", new_value=ts)
+    elif action == "结束":
+        if not item.get("experiment_started_at"):
+            raise ValueError("请先记录实验开始时间")
+        if item.get("experiment_ended_at"):
+            return item
+        with connect() as c:
+            c.execute(
+                """UPDATE tasks SET experiment_ended_at=?,updated_at=?
+                   WHERE task_no=?""",
+                (ts, ts, task_no),
+            )
+        audit("task", task_no, actor, "实验结束", new_value=ts)
+    else:
+        raise ValueError("未知的时间轴操作")
+    return task(task_no) or {}
 
 
 # ---------------------- Records and review ----------------------

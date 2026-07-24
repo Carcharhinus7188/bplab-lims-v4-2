@@ -212,7 +212,13 @@ def report_document(c,groups,samples,tasks,records,report,user_names,signatures)
         })
         report_items.append(item)
         test_dates.append(params.get("test_date") or common.get("test_date"))
-        location=snapshot.get("default_location") or params.get("detection_location") or "未记录地点"
+        location=(
+            t.get("detection_location")
+            or snapshot.get("selected_detection_location")
+            or params.get("detection_location")
+            or snapshot.get("default_location")
+            or "未记录地点"
+        )
         env=environment_by_location.setdefault(location,{"temperature":[],"humidity":[],"other":[]})
         env["temperature"].extend([params.get("temperature_before"),params.get("temperature_after")])
         env["humidity"].extend([params.get("humidity_before"),params.get("humidity_after")])
